@@ -81,7 +81,7 @@ int my_release(struct inode *inode, struct file *file)
 
 static ssize_t my_read(struct file *file, char __user *user_buffer,
                    size_t size, loff_t *offset)
-{
+{   
     struct my_dev *dev = (struct my_dev *) file->private_data;
     ssize_t len = min_t(ssize_t, dev->size - *offset, size);
     if (mutex_lock_interruptible(&dev->mutex))
@@ -102,7 +102,8 @@ static ssize_t my_read(struct file *file, char __user *user_buffer,
 static ssize_t my_write(struct file *file, const char __user *user_buffer,
                     size_t size, loff_t * offset)
 {	
-	ssize_t fullsize = 1000;
+	int i;
+    ssize_t fullsize = 1000;
     struct my_dev *dev = (struct my_dev *) file->private_data;
     ssize_t len = min_t(ssize_t, fullsize - (dev->size - *offset), size);
     ssize_t retval = -ENOMEM;
@@ -116,11 +117,23 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
             goto out;
         memset(dev->data, 0, fullsize * sizeof(char *));
     }
-    /* read data from user buffer to my_data->buffer */
-    if (copy_from_user(dev->data + *offset, user_buffer, len)){
-        retval = -EFAULT;
-        return retval;
+    char *tmp = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
+    for(i = 0; i<len; i++){
+        char to_upper = tmp[i];
+        to_upper = 'A' + to_upper - 'a';// convert to uppercase
+        tmp[i] = to_upper;
+        if(copy_from_user(tmp+i, user_buffer+i, 1)){
+            retval = -EFAULT;
+            return retval;
+        }
     }
+    dev->data = tmp;
+    kfree(tmp);
+    /* read data from user buffer to my_data->buffer */
+    // if (copy_from_user(dev->data + *offset, user_buffer, len)){
+    //     retval = -EFAULT;
+    //     return retval;
+    // }
 
     *offset += len;
     dev -> size += len;
