@@ -60,6 +60,10 @@ static int my_open(struct inode *inode, struct file *file)
     file->private_data = dev;
     if ( (file->f_flags & O_ACCMODE) == O_WRONLY) {
         my_trim(dev); /* Ignore errors. */
+        /*
+         There might be an issue in case write is requested on the same device by separate processess. It might truncate the file (my_trim) while the second process is not finished writing.
+         Thus, a locking mechanism might be required for the same. 
+         */
     }
 	printk(KERN_DEBUG "process %i (%s) success open minor(%u) file\n", current->pid, current->comm, iminor(inode));
     return 0;
@@ -87,6 +91,7 @@ static ssize_t my_read(struct file *file, char __user *user_buffer,
     *offset += len;
     return len;
 }
+
 
 static ssize_t my_write(struct file *file, const char __user *user_buffer,
                     size_t size, loff_t * offset)
