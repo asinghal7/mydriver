@@ -93,7 +93,7 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
 {	
 	ssize_t fullsize = 1000;
     struct my_dev *dev = (struct my_dev *) file->private_data;
-    ssize_t len = min_t(ssize_t, dev->size - *offset, size);
+    ssize_t len = min_t(ssize_t, fullsize - (dev->size - *offset), size);
     ssize_t retval = -ENOMEM;
 
     if (len <= 0)
