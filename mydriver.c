@@ -119,9 +119,9 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
     }
     char *tmp = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
     for(i = 0; i<len; i++){
-        char to_upper = tmp[i];
-        to_upper = 'A' + to_upper - 'a';// convert to uppercase
-        tmp[i] = to_upper;
+        char to_upper;
+        to_upper = 'A' + *(tmp+i) - 'a';// convert to uppercase
+        *(tmp+i) = to_upper;
         if(copy_from_user(tmp+i, user_buffer+i, 1)){
             retval = -EFAULT;
             return retval;
