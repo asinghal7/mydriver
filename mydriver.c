@@ -96,7 +96,9 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
     struct my_dev *dev = (struct my_dev *) file->private_data;
     ssize_t len = min_t(ssize_t, fullsize - (dev->size - *offset), size);
     ssize_t retval = -ENOMEM;
-
+    char *tmp = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
+    char to_upper;
+    
     if (len <= 0)
         return 0;
     if (!dev->data) {
@@ -105,15 +107,15 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
             goto out;
         memset(dev->data, 0, fullsize * sizeof(char *));
     }
-    char *tmp = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
+    
     for(i = 0; i<len; i++){
-        char to_upper;
-        to_upper = 'A' + *(tmp+i) - 'a';// convert to uppercase
-        *(tmp+i) = to_upper;
         if(copy_from_user(tmp+i, user_buffer+i, 1)){
             retval = -EFAULT;
             return retval;
         }
+        
+        to_upper = 'A' + *(tmp+i) - 'a';// convert to uppercase
+        *(tmp+i) = to_upper;
     }
     dev->data = tmp;
     kfree(tmp);
