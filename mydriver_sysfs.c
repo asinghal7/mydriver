@@ -13,6 +13,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Akshat");
  
 volatile int mysys_value = 0;
+volatile int mysys_mode = 0;
 int mysys_driver_major = 0;
 int mysys_driver_minor = 0; 
  
@@ -38,8 +39,19 @@ static ssize_t sysfs_show(struct kobject *kobj,
 static ssize_t sysfs_store(struct kobject *kobj, 
                 struct kobj_attribute *attr,const char *buf, size_t count);
  
-struct kobj_attribute mysys_attr = __ATTR(mysys_value, 0660, sysfs_show, sysfs_store);
- 
+static struct kobj_attribute mysys_attr_val = __ATTR(mysys_value, 0660, sysfs_show, sysfs_store);
+static struct kobj_attribute mysys_attr_mode =  __ATTR(mysys_mode, 0660, sysfs_show, sysfs_store);
+
+static struct attribute *attrs[] = {
+    &mysys_attr_val.attr,
+    &mysys_attr_mode.attr,
+    NULL,
+};
+
+static struct attribute_group attr_group = {
+    .attrs = attrs,
+};
+
 static struct file_operations fops =
 {
         .owner          = THIS_MODULE,
@@ -53,15 +65,19 @@ static ssize_t sysfs_show(struct kobject *kobj,
                 struct kobj_attribute *attr, char *buf)
 {
         //printk(KERN_INFO "Sysfs - Read!\n");
+    if(strcmp(attr->attr.name, "mysys_value") == 0)
         return sprintf(buf, "%d\n", mysys_value);
+    else
+        return 0;
 }
  
 static ssize_t sysfs_store(struct kobject *kobj, 
                 struct kobj_attribute *attr,const char *buf, size_t count)
 {
         //printk(KERN_INFO "Sysfs - Write!\n");
+    if(strcmp(attr->attr.name, "mysys_value") == 0)
         sscanf(buf,"%d\n",&mysys_value);
-        return count;
+    return count;
 }
  
 static int mysys_open(struct inode *inode, struct file *file)
@@ -123,9 +139,9 @@ static int __init mysys_driver_init(void)
         /*Creating a directory in /sys/kernel/ */
         kobj_ref = kobject_create_and_add("mysys_sysfs",kernel_kobj);
  
-        /*Creating sysfs file for mysys_value*/
-        if(sysfs_create_file(kobj_ref,&mysys_attr.attr)){
-                printk(KERN_INFO"Cannot create sysfs file......\n");
+        /*Creating sysfs file for mysys_value*/     
+         if(sysfs_create_group(kobj_ref,&attr_group)){
+                printk(KERN_INFO"Cannot create sysfs files...\n");
                 goto r_sysfs;
     }
         printk(KERN_INFO "Device Driver Insert...Done!!!\n");
@@ -133,7 +149,7 @@ static int __init mysys_driver_init(void)
  
 r_sysfs:
         kobject_put(kobj_ref); 
-        sysfs_remove_file(kernel_kobj, &mysys_attr.attr);
+        sysfs_remove_group(kernel_kobj, &attr_group);
  
 r_device:
         class_destroy(dev_class);
@@ -146,7 +162,7 @@ r_class:
 void __exit mysys_driver_exit(void)
 {
         kobject_put(kobj_ref); 
-        sysfs_remove_file(kernel_kobj, &mysys_attr.attr);
+        sysfs_remove_group(kernel_kobj, &attr_group);
         device_destroy(dev_class,dev);
         class_destroy(dev_class);
         cdev_del(&mysys_cdev);
