@@ -107,6 +107,8 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
     struct my_dev *dev = (struct my_dev *) file->private_data;
     ssize_t len = min_t(ssize_t, fullsize - (dev->size - *offset), size);
     ssize_t retval = -ENOMEM;
+    char *tmp = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
+    char to_upper;
 
     if (mutex_lock_interruptible(&dev->mutex))
         return -ERESTARTSYS;
