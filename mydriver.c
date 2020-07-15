@@ -98,7 +98,7 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
     ssize_t retval = -ENOMEM;
     char *tmp = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
     char to_upper;
-    
+
     if (len <= 0)
         return 0;
     if (!dev->data) {
@@ -113,9 +113,10 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
             retval = -EFAULT;
             return retval;
         }
-        
-        to_upper = 'A' + *(tmp+i) - 'a';// convert to uppercase
-        *(tmp+i) = to_upper;
+        if(i<(len-1)){   
+            to_upper = 'A' + *(tmp+i) - 'a';// convert to uppercase
+            *(tmp+i) = to_upper;
+        }
     }
     dev->data = tmp;
     kfree(tmp);
