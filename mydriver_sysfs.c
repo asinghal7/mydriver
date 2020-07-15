@@ -52,40 +52,40 @@ static struct file_operations fops =
 static ssize_t sysfs_show(struct kobject *kobj, 
                 struct kobj_attribute *attr, char *buf)
 {
-        printk(KERN_INFO "Sysfs - Read!\n");
+        //printk(KERN_INFO "Sysfs - Read!\n");
         return sprintf(buf, "%d\n", mysys_value);
 }
  
 static ssize_t sysfs_store(struct kobject *kobj, 
                 struct kobj_attribute *attr,const char *buf, size_t count)
 {
-        printk(KERN_INFO "Sysfs - Write!\n");
+        //printk(KERN_INFO "Sysfs - Write!\n");
         sscanf(buf,"%d\n",&mysys_value);
         return count;
 }
  
 static int mysys_open(struct inode *inode, struct file *file)
 {
-    printk(KERN_INFO "Device File Opened...!!!\n");
+    printk(KERN_INFO "mysys_driver: opened successfully\n");
     return 0;
 }
  
 static int mysys_release(struct inode *inode, struct file *file)
 {
-        printk(KERN_INFO "Device File Closed...!!!\n");
+        //printk(KERN_INFO "Device File Closed...!!!\n");
         return 0;
 }
  
 static ssize_t mysys_read(struct file *filp, 
                 char __user *buf, size_t len, loff_t *off)
 {
-        printk(KERN_INFO "Read function\n");
+        //printk(KERN_INFO "Read function\n");
         return 0;
 }
 static ssize_t mysys_write(struct file *filp, 
                 const char __user *buf, size_t len, loff_t *off)
 {
-        printk(KERN_INFO "Write Function\n");
+        //printk(KERN_INFO "Write Function\n");
         return 0;
 }
  

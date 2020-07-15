@@ -18,6 +18,7 @@ int my_nr_devs = 2;
 struct my_dev {
     void *data;
     unsigned long size;
+    struct mutex mutex;
     struct cdev cdev;
 };
 struct my_dev *my_devs;
@@ -59,7 +60,10 @@ static int my_open(struct inode *inode, struct file *file)
     /* validate access to device */
     file->private_data = dev;
     if ( (file->f_flags & O_ACCMODE) == O_WRONLY) {
+        if (mutex_lock_interruptible(&dev->mutex))
+            return -ERESTARTSYS;    
         my_trim(dev); /* Ignore errors. */
+        mutex_unlock(&dev->mutex);
         /*
          There might be an issue in case write is requested on the same device by separate processess. It might truncate the file (my_trim) while the second process is not finished writing.
          Thus, a locking mechanism might be required for the same. 
@@ -80,7 +84,8 @@ static ssize_t my_read(struct file *file, char __user *user_buffer,
 {
     struct my_dev *dev = (struct my_dev *) file->private_data;
     ssize_t len = min_t(ssize_t, dev->size - *offset, size);
-
+    if (mutex_lock_interruptible(&dev->mutex))
+        return -ERESTARTSYS;
     if (len <= 0)
         return 0;
 
@@ -89,6 +94,7 @@ static ssize_t my_read(struct file *file, char __user *user_buffer,
         return -EFAULT;
 
     *offset += len;
+    mutex_unlock(&dev->mutex);
     return len;
 }
 
@@ -100,7 +106,8 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
     struct my_dev *dev = (struct my_dev *) file->private_data;
     ssize_t len = min_t(ssize_t, fullsize - (dev->size - *offset), size);
     ssize_t retval = -ENOMEM;
-
+    if (mutex_lock_interruptible(&dev->mutex))
+        return -ERESTARTSYS;
     if (len <= 0)
         return 0;
     if (!dev->data) {
@@ -119,6 +126,7 @@ static ssize_t my_write(struct file *file, const char __user *user_buffer,
     dev -> size += len;
     retval = len;
     out:
+    mutex_unlock(&dev->mutex);
     return retval;
 }
 
@@ -203,7 +211,7 @@ int my_init_module(void)
     for (i = 0; i < my_nr_devs; i++) {
         //scull_devices[i].quantum = scull_quantum;
         //scull_devices[i].qset = scull_qset;
-        //mutex_init(&scull_devices[i].mutex);
+        mutex_init(&my_devs[i].mutex);
         my_setup_cdev(&my_devs[i], i);
     }    
     return 0; /* succeed */  
