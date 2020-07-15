@@ -149,7 +149,7 @@ static int __init mysys_driver_init(void)
  
 r_sysfs:
         kobject_put(kobj_ref); 
-        sysfs_remove_file(kernel_kobj, &mysys_attr_val.attr);
+        sysfs_remove_group(kernel_kobj, &attr_group);
  
 r_device:
         class_destroy(dev_class);
