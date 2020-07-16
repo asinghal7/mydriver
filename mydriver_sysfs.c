@@ -82,7 +82,16 @@ static ssize_t sysfs_store(struct kobject *kobj,
     char to_upper;
     size_t  i;
     if(strcmp(attr->attr.name, "mysys_value") == 0){
+        /*
+         * Text in user input format 
+         */
         if(mysys_mode == 0){
+            sscanf(buf,"%s\n",mysys_value);
+        }
+        /*
+         * Converting user input to uppercase
+         */
+        else if(mysys_mode == 1){
             sscanf(buf,"%s\n",mysys_value);
             for(i=0;i<count;i++){
                 if(i<(count-1)){   
@@ -92,7 +101,7 @@ static ssize_t sysfs_store(struct kobject *kobj,
             }
         }
     }
-    else if(strcmp(attr->attr.name, "mysys_attr_mode") == 0){
+    else if(strcmp(attr->attr.name, "mysys_mode") == 0){
             sscanf(buf,"%d\n",&mysys_mode);
     }
     return count;
