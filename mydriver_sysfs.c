@@ -75,37 +75,47 @@ static ssize_t sysfs_show(struct kobject *kobj,
         else
                 return 0;
 }
- 
-static ssize_t sysfs_store(struct kobject *kobj, 
-                struct kobj_attribute *attr,const char *buf, size_t count)
+
+/*
+ * In case the program is at evaluation the of condition for the 
+ * else if case for mode '1' and another process changes mysys_mode 
+ * from '2' to '0', the program will fall through to the dummy value. 
+ * This is undesirable and hence calls for the use of a lock.
+ */
+static ssize_t sysfs_store(struct kobject *kobj,
+                struct kobj_attribute *attr, const char *buf, size_t count)
 {
         //printk(KERN_INFO "Sysfs - Write!\n");
-    char to_upper;
-    size_t  i;
-    if(strcmp(attr->attr.name, "mysys_value") == 0){
+        size_t  i;
         /*
-         * Text in user input format 
+         * Mode 0: Text in user input format 
+         * Mode 1: Converting user input to uppercase
+         * Mode 2: ROT13 encryption/decryption
          */
-        if(mysys_mode == 0){
-            sscanf(buf,"%s\n",mysys_value);
-        }
-        /*
-         * Converting user input to uppercase
-         */
-        else if(mysys_mode == 1){
-            sscanf(buf,"%s\n",mysys_value);
-            for(i=0;i<count;i++){
-                if(i<(count-1)){   
-                    to_upper = 'A' + *(mysys_value+i) - 'a';// convert to uppercase
-                    *(mysys_value+i) = to_upper;
+        mutex_lock(&sys_mutex);
+        if (strcmp(attr->attr.name, "mysys_value") == 0) {
+                if (mysys_mode == 0) {
+                        sscanf(buf, "%s\n", mysys_value);
+                } else if (mysys_mode == 1) {
+                        sscanf(buf, "%s\n", mysys_value);
+                        for (i = 0; i < (count-1); i++)
+                                *(mysys_value+i) += ('A' - 'a');
+                } else if (mysys_mode == 2) {
+                        sscanf(buf, "%s\n", mysys_value);
+                        for (i = 0; i < (count-1); i++) {
+                                if (strcmp(mysys_value+i, "m") > 0)
+                                        *(mysys_value+i) -= ('n' - 'a');
+                                else
+                                        *(mysys_value+i) += ('n' - 'a');
+                        }
+                } else {
+                        sscanf("dummy", "%s\n", mysys_value);
                 }
-            }
+        } else if (strcmp(attr->attr.name, "mysys_mode") == 0) {
+            sscanf(buf, "%d\n", &mysys_mode);
         }
-    }
-    else if(strcmp(attr->attr.name, "mysys_mode") == 0){
-            sscanf(buf,"%d\n",&mysys_mode);
-    }
-    return count;
+        mutex_unlock(&sys_mutex);
+        return count;
 }
 
 static int mysys_open(struct inode *inode, struct file *file)
