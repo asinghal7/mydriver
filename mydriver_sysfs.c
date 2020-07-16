@@ -79,8 +79,8 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 struct kobj_attribute *attr,const char *buf, size_t count)
 {
         //printk(KERN_INFO "Sysfs - Write!\n");
-    char to_upper;
     size_t  i;
+    char crypt;
     if(strcmp(attr->attr.name, "mysys_value") == 0){
         /*
          * Text in user input format 
@@ -93,11 +93,20 @@ static ssize_t sysfs_store(struct kobject *kobj,
          */
         else if(mysys_mode == 1){
             sscanf(buf,"%s\n",mysys_value);
-            for(i=0;i<count;i++){
-                if(i<(count-1)){   
-                    to_upper = 'A' + *(mysys_value+i) - 'a';// convert to uppercase
-                    *(mysys_value+i) = to_upper;
+            for(i=0;i<(count-1);i++){   
+                *(mysys_value+i) += ('A' - 'a');// convert to uppercase
+            }
+        }
+        else if(mysys_mode == 2){
+            for(i=0;i<(count-1);i++){
+                crypt = *(mysys_value+i);
+                if(crypt>'m'){
+                    crypt -= 13;
                 }
+                else{
+                    crypt += 13;   
+                }
+                *(mysys_value+i) = crypt;
             }
         }
     }
