@@ -80,7 +80,6 @@ static ssize_t sysfs_store(struct kobject *kobj,
 {
         //printk(KERN_INFO "Sysfs - Write!\n");
     size_t  i;
-    char crypt;
     if(strcmp(attr->attr.name, "mysys_value") == 0){
         /*
          * Text in user input format 
@@ -98,15 +97,14 @@ static ssize_t sysfs_store(struct kobject *kobj,
             }
         }
         else if(mysys_mode == 2){
+            sscanf(buf,"%s\n",mysys_value);
             for(i=0;i<(count-1);i++){
-                crypt = *(mysys_value+i);
-                if(crypt>'m'){
-                    crypt -= 13;
+                if(strcmp(mysys_value+i, "m") > 0){
+                    *(mysys_value+i) -= ('n' - 'a');
                 }
                 else{
-                    crypt += 13;   
+                    *(mysys_value+i) += ('n' - 'a');   
                 }
-                *(mysys_value+i) = crypt;
             }
         }
     }
