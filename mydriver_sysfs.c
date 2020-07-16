@@ -11,12 +11,14 @@
 #include<linux/kobject.h> 
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Akshat");
- 
-volatile int mysys_value = 0;
+
+
+char *mysys_value;
 volatile int mysys_mode = 0;
 int mysys_driver_major = 0;
 int mysys_driver_minor = 0; 
  
+
 dev_t dev = 0;
 static struct class *dev_class;
 static struct cdev mysys_cdev;
@@ -66,7 +68,9 @@ static ssize_t sysfs_show(struct kobject *kobj,
 {
         //printk(KERN_INFO "Sysfs - Read!\n");
     if(strcmp(attr->attr.name, "mysys_value") == 0)
-        return sprintf(buf, "%d\n", mysys_value);
+        return sprintf(buf, "%s\n", mysys_value);
+    else if (strcmp(attr->attr.name, "mysys_mode") == 0)
+        return sprintf(buf, "%d\n", mysys_mode);
     else
         return 0;
 }
@@ -75,8 +79,22 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 struct kobj_attribute *attr,const char *buf, size_t count)
 {
         //printk(KERN_INFO "Sysfs - Write!\n");
-    if(strcmp(attr->attr.name, "mysys_value") == 0)
-        sscanf(buf,"%d\n",&mysys_value);
+    char to_upper;
+    size_t  i;
+    if(strcmp(attr->attr.name, "mysys_value") == 0){
+        if(mysys_mode == 0){
+            sscanf(buf,"%s\n",mysys_value);
+            for(i=0;i<count;i++){
+                if(i<(count-1)){   
+                    to_upper = 'A' + *(mysys_value+i) - 'a';// convert to uppercase
+                    *(mysys_value+i) = to_upper;
+                }
+            }
+        }
+    }
+    else if(strcmp(attr->attr.name, "mysys_attr_mode") == 0){
+            sscanf(buf,"%d\n",&mysys_mode);
+    }
     return count;
 }
  
@@ -138,13 +156,14 @@ static int __init mysys_driver_init(void)
  
         /*Creating a directory in /sys/kernel/ */
         kobj_ref = kobject_create_and_add("mysys_sysfs",kernel_kobj);
- 
+        mysys_value = kmalloc(1000 * sizeof(char *), GFP_KERNEL);
         /*Creating sysfs file for mysys_value*/     
-         if(sysfs_create_group(kobj_ref,&attr_group)){
+        if(sysfs_create_group(kobj_ref,&attr_group)){
                 printk(KERN_INFO"Cannot create sysfs files...\n");
                 goto r_sysfs;
-    }
+        }
         printk(KERN_INFO "Device Driver Insert...Done!!!\n");
+    
     return 0;
  
 r_sysfs:
@@ -168,6 +187,7 @@ void __exit mysys_driver_exit(void)
         cdev_del(&mysys_cdev);
         unregister_chrdev_region(dev, 1);
         printk(KERN_INFO "mysys_driver: cleanup success\n");
+        kfree(mysys_value);
 }
  
 module_init(mysys_driver_init);
