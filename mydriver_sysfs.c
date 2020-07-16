@@ -17,7 +17,7 @@ char *mysys_value;
 volatile int mysys_mode = 0;
 int mysys_driver_major = 0;
 int mysys_driver_minor = 0; 
- 
+static DEFINE_MUTEX(sys_mutex); 
 
 dev_t dev = 0;
 static struct class *dev_class;
@@ -84,11 +84,16 @@ static ssize_t sysfs_store(struct kobject *kobj,
         /*
          * Text in user input format 
          */
+        mutex_lock(&sys_mutex);
         if(mysys_mode == 0){
             sscanf(buf,"%s\n",mysys_value);
         }
         /*
          * Converting user input to uppercase
+         */
+        /*
+         * In case the program is at evaluation the condition for the subsequent else if and another process changes mysys_mode from '2' to '0',
+         * the program will fall through to the dummy value. This is undesirable and hence calls for the use of a lock.
          */
         else if(mysys_mode == 1){
             sscanf(buf,"%s\n",mysys_value);
@@ -96,6 +101,9 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 *(mysys_value+i) += ('A' - 'a');// convert to uppercase
             }
         }
+        /*
+         * ROT13 encryption/decryption
+         */
         else if(mysys_mode == 2){
             sscanf(buf,"%s\n",mysys_value);
             for(i=0;i<(count-1);i++){
@@ -107,10 +115,14 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 }
             }
         }
+        else{
+            sscanf("dummy","%s\n",mysys_value);
+        }
     }
     else if(strcmp(attr->attr.name, "mysys_mode") == 0){
             sscanf(buf,"%d\n",&mysys_mode);
     }
+    mutex_unlock(&sys_mutex);
     return count;
 }
  
