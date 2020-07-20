@@ -80,7 +80,7 @@ static ssize_t sysfs_show(struct kobject *kobj,
                 if (mysys_bmode == 0){
                         return sprintf(buf, "%s\n", mysys_value);
                 } else if (mysys_bmode == 1){
-                        return snprintf(buf, sizeof(mysys_value), "%s\n", mysys_value);
+                        return scnprintf(buf, mysys_bsize+1, "%s\n", mysys_value);
                 }
         } else if (strcmp(attr->attr.name, "mysys_mode") == 0){
                 return sprintf(buf, "%d\n", mysys_mode);
@@ -116,8 +116,11 @@ static ssize_t sysfs_store(struct kobject *kobj,
                         if (mysys_bmode == 1){
                                 kfree(mysys_value);
                                 mysys_value = kmalloc(mysys_bsize * sizeof(char *), GFP_KERNEL);
+                                snprintf(mysys_value, mysys_bsize , "%s\n", buf);
+
+                        } else{
+                                sscanf(buf, "%s\n", mysys_value);
                         }
-                        sscanf(buf, "%s\n", mysys_value);
                 } else if (mysys_mode == 1) {
                         sscanf(buf, "%s\n", mysys_value);
                         for (i = 0; i < (count-1); i++)
