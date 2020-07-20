@@ -13,16 +13,18 @@ MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Akshat");
 
 
-char *mysys_value;
-int mysys_mode = 0;
-int mysys_driver_major = 0;
-int mysys_driver_minor = 0;
+static char *mysys_value;
+static int mysys_mode = 0;
+static int mysys_bmode = 0;
+static int mysys_bsize = 0;
+static int mysys_driver_major = 0;
+static int mysys_driver_minor = 0;
 static DEFINE_MUTEX(sys_mutex);
 
-dev_t dev = 0;
+static dev_t dev = 0;
 static struct class *dev_class;
 static struct cdev mysys_cdev;
-struct kobject *kobj_ref;
+static struct kobject *kobj_ref;
 
 static int __init mysys_driver_init(void);
 static void __exit mysys_driver_exit(void);
@@ -44,10 +46,16 @@ static struct kobj_attribute mysys_attr_val = __ATTR(mysys_value, 0660,
                                                         sysfs_show, sysfs_store);
 static struct kobj_attribute mysys_attr_mode =  __ATTR(mysys_mode, 0660,
                                                         sysfs_show, sysfs_store);
+static struct kobj_attribute mysys_attr_bmode = __ATTR(mysys_bmode, 0660,
+                                                        sysfs_show, sysfs_store);
+static struct kobj_attribute mysys_attr_bsize = __ATTR(mysys_bsize, 0660,
+                                                        sysfs_show, sysfs_store);
 
 static struct attribute *attrs[] = {
         &mysys_attr_val.attr,
         &mysys_attr_mode.attr,
+        &mysys_attr_bmode.attr,
+        &mysys_attr_bsize.attr,
         NULL,
 };
 
@@ -68,12 +76,20 @@ static ssize_t sysfs_show(struct kobject *kobj,
                 struct kobj_attribute *attr, char *buf)
 {
         //printk(KERN_INFO "Sysfs - Read!\n");
-        if (strcmp(attr->attr.name, "mysys_value") == 0)
-                return sprintf(buf, "%s\n", mysys_value);
-        else if (strcmp(attr->attr.name, "mysys_mode") == 0)
+        if (strcmp(attr->attr.name, "mysys_value") == 0){
+                if (mysys_bmode == 0){
+                        return sprintf(buf, "%s\n", mysys_value);
+                } else if (mysys_bmode == 1){
+                        return snprintf(buf, sizeof(mysys_value), "%s\n", mysys_value);
+                }
+        } else if (strcmp(attr->attr.name, "mysys_mode") == 0){
                 return sprintf(buf, "%d\n", mysys_mode);
-        else
-                return 0;
+        } else if (strcmp(attr->attr.name, "mysys_bmode") == 0){
+                return sprintf(buf, "%d\n", mysys_bmode);
+        } else if (strcmp(attr->attr.name, "mysys_bsize") == 0){
+                return sprintf(buf, "%d\n", mysys_bsize);
+        }
+        return 0;
 }
 
 /*
@@ -87,14 +103,20 @@ static ssize_t sysfs_store(struct kobject *kobj,
 {
         //printk(KERN_INFO "Sysfs - Write!\n");
         size_t  i;
+        
         /*
          * Mode 0: Text in user input format 
          * Mode 1: Converting user input to uppercase
          * Mode 2: ROT13 encryption/decryption
          */
         mutex_lock(&sys_mutex);
+        
         if (strcmp(attr->attr.name, "mysys_value") == 0) {
                 if (mysys_mode == 0) {
+                        if (mysys_bmode == 1){
+                                kfree(mysys_value);
+                                mysys_value = kmalloc(mysys_bsize * sizeof(char *), GFP_KERNEL);
+                        }
                         sscanf(buf, "%s\n", mysys_value);
                 } else if (mysys_mode == 1) {
                         sscanf(buf, "%s\n", mysys_value);
@@ -113,6 +135,10 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 }
         } else if (strcmp(attr->attr.name, "mysys_mode") == 0) {
             sscanf(buf, "%d\n", &mysys_mode);
+        } else if (strcmp(attr->attr.name, "mysys_bmode") == 0) {
+            sscanf(buf, "%d\n", &mysys_bmode);
+        } else if (strcmp(attr->attr.name, "mysys_bsize") == 0) {
+            sscanf(buf, "%d\n", &mysys_bsize);
         }
         mutex_unlock(&sys_mutex);
         return count;
@@ -150,7 +176,9 @@ static int __init mysys_driver_init(void)
                 printk(KERN_INFO "Cannot allocate major number\n");
                 return -1;
         }
-        printk(KERN_INFO "Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
+        mysys_driver_minor = MINOR(dev);
+        mysys_driver_major = MAJOR(dev);
+        printk(KERN_INFO "Major = %d Minor = %d \n", mysys_driver_major, mysys_driver_minor);
  
         /*Creating cdev structure*/
         cdev_init(&mysys_cdev, &fops);
