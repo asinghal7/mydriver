@@ -74,13 +74,15 @@ static struct file_operations fops =
 
 static ssize_t sysfs_show(struct kobject *kobj, 
                 struct kobj_attribute *attr, char *buf)
-{
+{       
+        size_t i;
         //printk(KERN_INFO "Sysfs - Read!\n");
         if (strcmp(attr->attr.name, "mysys_value") == 0){
                 if (mysys_bmode == 0){
                         return sprintf(buf, "%s\n", mysys_value);
                 } else if (mysys_bmode == 1){
-                        return scnprintf(buf, mysys_bsize+1, "%s\n", mysys_value);
+                        for (i = 0; i < (sizeof(mysys_value)/sizeof(char *))/mysys_bsize; i++)
+                                return scnprintf(buf, mysys_bsize+1, "%s\n", mysys_value);
                 }
         } else if (strcmp(attr->attr.name, "mysys_mode") == 0){
                 return sprintf(buf, "%d\n", mysys_mode);
@@ -110,17 +112,17 @@ static ssize_t sysfs_store(struct kobject *kobj,
          * Mode 2: ROT13 encryption/decryption
          */
         mutex_lock(&sys_mutex);
-        
         if (strcmp(attr->attr.name, "mysys_value") == 0) {
-                if (mysys_mode == 0) {
-                        if (mysys_bmode == 1){
-                                kfree(mysys_value);
-                                mysys_value = kmalloc(mysys_bsize * sizeof(char *), GFP_KERNEL);
-                                snprintf(mysys_value, mysys_bsize , "%s\n", buf);
-
-                        } else{
-                                sscanf(buf, "%s\n", mysys_value);
+                if (mysys_mode == 0 && mysys_bmode == 1) {
+                        kfree(mysys_value);
+                        mysys_value = kmalloc(count * sizeof(char *), GFP_KERNEL);
+                        for(i = 0; i <= count/mysys_bsize ; i++){
+                                snprintf(mysys_value + i*mysys_bsize, mysys_bsize , "%s\n", buf + i*mysys_bsize);
+                                if (i == (count/mysys_bsize - 1) && count%mysys_bsize == 0)
+                                        break;
                         }
+                } else if (mysys_mode == 0 && mysys_bmode == 0) {
+                                sscanf(buf, "%s\n", mysys_value);
                 } else if (mysys_mode == 1) {
                         sscanf(buf, "%s\n", mysys_value);
                         for (i = 0; i < (count-1); i++)
