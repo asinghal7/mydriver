@@ -173,6 +173,8 @@ static ssize_t my_write(struct file *filp,
                 const char __user *user_buffer, size_t size, loff_t *offset)
 {
         ssize_t fullsize = 1000;
+        int i;
+        char *tmp = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
         
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         ssize_t len = min_t(ssize_t, fullsize - (dev->size - *offset), size);
@@ -188,12 +190,24 @@ static ssize_t my_write(struct file *filp,
                         goto out;
                 memset(dev->data, 0, fullsize * sizeof(char *));
         }
-        /* read data from user buffer to my_data->buffer */
-        if (copy_from_user(dev->data + *offset, user_buffer, len)){
-                retval = -EFAULT;
-                return retval;
+        if (copy_from_user(tmp, user_buffer, len)){
+                        retval = -EFAULT;
+                        return retval;
         }
-
+        if (my_mode == 0) {
+        } else if (my_mode == 1) {
+                for (i = 0; i < (len - 1); i++)
+                        *(tmp + i) += ('A' - 'a');
+        } else if (my_mode == 2) {
+                for (i = 0; i < (len - 1); i++) {
+                        if (strcmp(tmp + i, "m") > 0)
+                                *(tmp + i) -= ('n' - 'a');
+                        else
+                                *(tmp + i) += ('n' - 'a');
+                }
+        }
+        dev -> data = tmp;
+        kfree(tmp);
         *offset += len;
         dev -> size += len;
         retval = len;
