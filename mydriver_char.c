@@ -94,7 +94,6 @@ static ssize_t my_read(struct file *file, char __user *user_buffer,
         return len;
 }
 
-
 static ssize_t my_write(struct file *file, const char __user *user_buffer,
                                 size_t size, loff_t * offset)
 {	
@@ -178,7 +177,7 @@ static void my_setup_cdev(struct my_dev *dev, int index)
 int my_init_module(void)
 {
         int result, i;
-        dev_t dev = 0;    
+        dev_t dev = 0;
         /*
          * Get a range of minor numbers to work with, asking for a dynamic major
          * unless directed otherwise at load time.
@@ -209,7 +208,7 @@ int my_init_module(void)
         for (i = 0; i < my_nr_devs; i++) {
                 mutex_init(&my_devs[i].mutex);
                 my_setup_cdev(&my_devs[i], i);
-        }    
+        }
         return 0; /* succeed */  
         fail:
         my_cleanup_module();
