@@ -127,7 +127,6 @@ int my_trim(struct my_dev *dev)
         return 0;
 }
 
-
 static int my_open(struct inode *inode, struct file *file)
 {       
 
@@ -153,20 +152,52 @@ static int my_release(struct inode *inode, struct file *file)
 
 static ssize_t my_read(struct file *filp, 
                 char __user *user_buffer, size_t size, loff_t *offset)
-{
+{       
+        int i, j, my_rdbmode, my_rdmode;
+        size_t numblocks, my_rdbsize;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         ssize_t len = min_t(ssize_t, dev->size - *offset, size);
         
         if (mutex_lock_interruptible(&dev->mutex))
                 return -ERESTARTSYS;
-        if (len <= 0){
+        my_rdbsize = my_bsize;
+        my_rdbmode = my_bmode;
+        my_rdmode = my_mode;
+        if (my_rdbmode == 1){
+                tmp = kmalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
+                memset(tmp, 0, my_rdbsize * sizeof(char *));
+        }
+        if (len <= 0) {
                 mutex_unlock(&dev->mutex);
                 return 0;
         }
         /* read data from my_data->buffer to user buffer */
-        if (copy_to_user(user_buffer, dev->data + *offset, len))
-                return -EFAULT;
-
+        if (my_rdbmode == 1){
+                if (len % my_rdbsize) {
+                        numblocks = (len / my_rdbsize) + 1;
+                } else {    
+                        numblocks = len / my_rdbsize;
+                }
+                for (i = 0; i < numblocks ; i++){
+                        for (j = 0; j < my_rdbsize; j++) {
+                                if (i == (numblocks - 1) && j == ((len % my_rdbsize) - 1))
+                                        break;
+                                *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
+                        }
+                        if (i == (numblocks - 1)) {
+                                if (copy_to_user(user_buffer, tmp, (len % my_rdbsize) - 1))
+                                        return -EFAULT;                        
+                        } else {
+                                if (copy_to_user(user_buffer, tmp, my_rdbsize))
+                                        return -EFAULT;
+                        }
+                }
+        } else {
+                if (copy_to_user(user_buffer, dev->data + *offset, len))
+                        return -EFAULT;
+        }
+        if (my_rdbmode == 1)
+                kfree(tmp);
         *offset += len;
         mutex_unlock(&dev->mutex);
         return len;
@@ -185,10 +216,14 @@ static ssize_t my_write(struct file *filp,
         my_wrbsize = my_bsize;
         my_wrbmode = my_bmode;
         my_wrmode = my_mode;
-        if (my_wrbmode == 1)
+        if (my_wrbmode == 1) {
                 tmp = kmalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
-        else
+                memset(tmp, 0, my_wrbsize * sizeof(char *));
+
+        } else {
                 tmp = kmalloc(size * sizeof(char *), GFP_KERNEL);
+                memset(tmp, 0, my_wrbsize * sizeof(char *));
+        }
         if (size <= 0){
                 mutex_unlock(&dev->mutex);
                 return 0;
@@ -219,10 +254,10 @@ static ssize_t my_write(struct file *filp,
                         }
                         if (my_wrmode == 0) {
                         } else if (my_wrmode == 1) {
-                                for (j = 0; j < (my_wrbsize - 1); j++)
+                                for (j = 0; j < my_wrbsize; j++)
                                         *(tmp + j) += ('A' - 'a');
                         } else if (my_wrmode == 2) {
-                                for (j = 0; j < (my_wrbsize - 1); j++) {
+                                for (j = 0; j < my_wrbsize; j++) {
                                         if (strcmp(tmp + j, "m") > 0)
                                                 *(tmp + j) -= ('n' - 'a');
                                         else
@@ -230,7 +265,7 @@ static ssize_t my_write(struct file *filp,
                                 }
                         }
                         for (j = 0; j < my_wrbsize; j++){
-                                if (i == (numblocks - 1) && j == (my_wrbsize - 1))
+                                if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1))
                                         break;
                                 *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);
                         }
@@ -257,6 +292,7 @@ static ssize_t my_write(struct file *filp,
                         *(dev->data + i) = *(tmp + i);
                 }
         }
+        kfree(tmp);
         *offset += size;
         dev->size += size;
         retval = size;
