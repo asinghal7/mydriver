@@ -32,10 +32,24 @@ struct my_dev {
         struct mutex mutex;
         struct cdev cdev;
 };
+
+struct my_aes_ctx {
+        struct crypto_cipher *fallback;
+        struct aes_key enc_key;
+        struct aes_key dec_key;
+};
+
 static struct my_dev *my_devs;
 
 static int __init my_driver_init(void);
 static void __exit my_driver_exit(void);
+
+static int my_aes_init(struct crypto_tfm *tfm);
+static void my_aes_exit(struct crypto_tfm *tfm);
+static int my_aes_setkey(struct crypto_tfm *tfm, const u8 *key,
+                                unsigned int keylen);
+static void my_aes_encrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src);
+static void my_aes_decrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src);
 
 /*************** Driver Fuctions **********************/
 static int my_open(struct inode *inode, struct file *file);
@@ -75,6 +89,114 @@ static struct file_operations my_fops =
         .write          = my_write,
         .open           = my_open,
         .release        = my_release,
+};
+
+static int my_aes_init(struct crypto_tfm *tfm)
+{
+        const char *alg = crypto_tfm_alg_name(tfm);
+        struct crypto_cipher *fallback;
+        struct my_aes_ctx = crypto_tfm_ctx(tfm);
+
+        fallback = crypto_alloc_cipher(alg, 0, CRYPTO_ALG_NEED_FALLBACK);
+        if (IS_ERR(fallback)) {
+                printk(KERN_ERR 
+                        "Failed to allocate tranformation for '%s': %ld\n",
+                        alg, PTR_ERR(fallback));
+                return PTR_ERR(fallback);
+        }
+        
+        crypto_cipher_set_flags(fallback, 
+                                crypto_cipher_get_flags((struct crypto_cipher *)
+                                                                tfm));
+        
+        ctx->fallback = fallback;
+        
+        return 0;
+}
+
+static void my_aes_exit(struct crypto_tfm *tfm)
+{
+        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+
+        if (ctx->fallback) {
+                crypto_free_cipher(ctx->fallback);
+                ctx->fallback = NULL;
+        }
+}
+
+static int my_aes_setkey(struct crypto_tfm *tfm, const u8 *key,
+                                unsigned int keylen)
+{
+        int ret;
+        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+
+        preempt_disable();
+        pagefault_disable();
+        enable_kernel_vsx();
+        ret = aes_my_set_encrypt_key(key, keylen * 8, &ctx->enc_key);
+        ret |= aes_my_set_decrypt_key(key, keylen * 8, &ctx->dec_key);
+        disable_kernel_vsx();
+        pagefault_enable();
+        preempt_enable();
+
+        ret |= crypto_cipher_setkey(ctx->fallback, key, keylen);
+
+        return ret ? -EINVAL : 0;
+}
+
+static void my_aes_encrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src)
+{
+        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+
+        if (!crypto_simd_usable()) {
+                crypto_cipher_encrypt_one(ctx->fallback, dst, src);
+        } else {
+                preempt_disable();
+                pagefault_disable();
+                enable_kernel_vsx();
+                aes_my_encrypt(src, dst, &ctx->enc_key);
+                disable_kernel_vsx();
+                pagefault_enable();
+                preempt_enable();
+        }
+}
+
+static void my_aes_decrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src)
+{
+        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+
+        if(!crypto_simd_usable()) {
+                crypto_cipher_decrypt_one(ctx->fallback, dst, src);
+        } else {
+                preempt_disable();
+                pagefault_disable();
+                enable_kernel_vsx();
+                aes_my_decrypt(src, dst, &ctx->dec_key);
+                disable_kernel_vsx();
+                pagefault_enable();
+                preempt_enable();
+        }
+}
+
+struct crypto_alg my_aes_alg = {
+        .cra_name = "aes",
+        .cra_driver_name = "mydriver",
+        .cra_module = THIS_MODULE,
+        .cra_priority = 1000,
+        .cra_type = NULL,
+        .cra_flags = CRYPTO_ALG_TYPE_CIPHER | CRYPTO_ALG_NEED_FALLBACK,
+        .cra_alignmask = 0,
+        .cra_blocksize = AES_BLOCK_SIZE,
+        .cra_ctxsize = sizeof(struct p8_aes_ctx),
+        .cra_init = p8_aes_init,
+        .cra_exit = p8_aes_exit,
+        .cra_cipher = {
+                       .cia_min_keysize = AES_MIN_KEY_SIZE,
+                       .cia_max_keysize = AES_MAX_KEY_SIZE,
+                       .cia_setkey = p8_aes_setkey,
+                       .cia_encrypt = p8_aes_encrypt,
+                       .cia_decrypt = p8_aes_decrypt,
+        },
 };
 
 static ssize_t sysfs_show(struct kobject *kobj, 
