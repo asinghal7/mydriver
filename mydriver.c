@@ -185,10 +185,10 @@ static ssize_t my_read(struct file *filp,
                                 *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
                         }
                         if (i == (numblocks - 1)) {
-                                if (copy_to_user(user_buffer, tmp, (len % my_rdbsize) - 1))
+                                if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, (len % my_rdbsize) - 1))
                                         return -EFAULT;                        
                         } else {
-                                if (copy_to_user(user_buffer, tmp, my_rdbsize))
+                                if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, my_rdbsize))
                                         return -EFAULT;
                         }
                 }
