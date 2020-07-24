@@ -9,6 +9,8 @@
 #include<linux/uaccess.h>              //copy_to/from_user()
 #include<linux/sysfs.h>
 #include<linux/kobject.h>
+#include <linux/crypto.h>
+#include <crypto/aes.h>
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Akshat");
 
@@ -18,7 +20,7 @@ static size_t my_bsize = 0;
 static int mydriver_major = 0;
 static int mydriver_minor = 0;
 static int my_nr_devs = 2;
-static char *tmp;
+static u8 *tmp;
 
 
 static DEFINE_MUTEX(sys_mutex);
@@ -27,29 +29,36 @@ static struct class *dev_class;
 static struct kobject *kobj_ref;
 
 struct my_dev {
-        char *data;
+        u8 *data;
         unsigned long size;
         struct mutex mutex;
         struct cdev cdev;
 };
 
+// struct my_aes_ctx {
+//         struct crypto_cipher *fallback;
+//         struct aes_key enc_key;
+//         struct aes_key dec_key;
+// };
+
 struct my_aes_ctx {
-        struct crypto_cipher *fallback;
-        struct aes_key enc_key;
-        struct aes_key dec_key;
+        struct crypto_cipher *tfm;
+        u8 *key;
 };
+static struct my_aes_ctx *my_ctx;
 
 static struct my_dev *my_devs;
 
 static int __init my_driver_init(void);
 static void __exit my_driver_exit(void);
 
-static int my_aes_init(struct crypto_tfm *tfm);
-static void my_aes_exit(struct crypto_tfm *tfm);
-static int my_aes_setkey(struct crypto_tfm *tfm, const u8 *key,
-                                unsigned int keylen);
-static void my_aes_encrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src);
-static void my_aes_decrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src);
+static int my_aes_init(void);
+// static int my_aes_init(struct crypto_tfm *tfm);
+// static void my_aes_exit(struct crypto_tfm *tfm);
+// static int my_aes_setkey(struct crypto_tfm *tfm, const u8 *key,
+//                                 unsigned int keylen);
+// static void my_aes_encrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src);
+// static void my_aes_decrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src);
 
 /*************** Driver Fuctions **********************/
 static int my_open(struct inode *inode, struct file *file);
@@ -91,113 +100,141 @@ static struct file_operations my_fops =
         .release        = my_release,
 };
 
-static int my_aes_init(struct crypto_tfm *tfm)
-{
-        const char *alg = crypto_tfm_alg_name(tfm);
-        struct crypto_cipher *fallback;
-        struct my_aes_ctx = crypto_tfm_ctx(tfm);
-
-        fallback = crypto_alloc_cipher(alg, 0, CRYPTO_ALG_NEED_FALLBACK);
-        if (IS_ERR(fallback)) {
+static int my_aes_init(void)
+{       
+        if (crypto_has_cipher("aes-generic", 0, 0))
+                my_ctx->tfm = crypto_alloc_cipher("aes-generic", 0, 0);
+        else
+                return -1;
+        if (IS_ERR(my_ctx->tfm)){
                 printk(KERN_ERR 
-                        "Failed to allocate tranformation for '%s': %ld\n",
-                        alg, PTR_ERR(fallback));
-                return PTR_ERR(fallback);
+                        "Failed to allocate tranformation aes-generic for : %ld\n",
+                        PTR_ERR(my_ctx->tfm));
+                return PTR_ERR(my_ctx->tfm);
         }
-        
-        crypto_cipher_set_flags(fallback, 
-                                crypto_cipher_get_flags((struct crypto_cipher *)
-                                                                tfm));
-        
-        ctx->fallback = fallback;
+
+        my_ctx->key = kmalloc(16 * sizeof(char *), GFP_KERNEL);
+        my_ctx->key = "abcdefghabcdefgh";
+        if (crypto_cipher_setkey(my_ctx->tfm, my_ctx->key, 16))
+                return -1;
         
         return 0;
 }
 
-static void my_aes_exit(struct crypto_tfm *tfm)
+static void my_aes_exit(void)
 {
-        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
-
-        if (ctx->fallback) {
-                crypto_free_cipher(ctx->fallback);
-                ctx->fallback = NULL;
-        }
+        crypto_free_cipher(my_ctx->tfm);
+        my_ctx->tfm = NULL;
+        kfree(my_ctx->key);
 }
 
-static int my_aes_setkey(struct crypto_tfm *tfm, const u8 *key,
-                                unsigned int keylen)
-{
-        int ret;
-        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+// static int my_aes_init(struct crypto_tfm *tfm)
+// {
+//         const char *alg = crypto_tfm_alg_name(tfm);
+//         struct crypto_cipher *fallback;
+//         struct my_aes_ctx = crypto_tfm_ctx(tfm);
 
-        preempt_disable();
-        pagefault_disable();
-        enable_kernel_vsx();
-        ret = aes_my_set_encrypt_key(key, keylen * 8, &ctx->enc_key);
-        ret |= aes_my_set_decrypt_key(key, keylen * 8, &ctx->dec_key);
-        disable_kernel_vsx();
-        pagefault_enable();
-        preempt_enable();
+//         fallback = crypto_alloc_cipher(alg, 0, CRYPTO_ALG_NEED_FALLBACK);
+//         if (IS_ERR(fallback)) {
+//                 printk(KERN_ERR 
+//                         "Failed to allocate tranformation for '%s': %ld\n",
+//                         alg, PTR_ERR(fallback));
+//                 return PTR_ERR(fallback);
+//         }
+        
+//         crypto_cipher_set_flags(fallback, 
+//                                 crypto_cipher_get_flags((struct crypto_cipher *)
+//                                                                 tfm));
+        
+//         ctx->fallback = fallback;
+        
+//         return 0;
+// }
 
-        ret |= crypto_cipher_setkey(ctx->fallback, key, keylen);
+// static void my_aes_exit(struct crypto_tfm *tfm)
+// {
+//         struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
 
-        return ret ? -EINVAL : 0;
-}
+//         if (ctx->fallback) {
+//                 crypto_free_cipher(ctx->fallback);
+//                 ctx->fallback = NULL;
+//         }
+// }
 
-static void my_aes_encrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src)
-{
-        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+// static int my_aes_setkey(struct crypto_tfm *tfm, const u8 *key,
+//                                 unsigned int keylen)
+// {
+//         int ret;
+//         struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
 
-        if (!crypto_simd_usable()) {
-                crypto_cipher_encrypt_one(ctx->fallback, dst, src);
-        } else {
-                preempt_disable();
-                pagefault_disable();
-                enable_kernel_vsx();
-                aes_my_encrypt(src, dst, &ctx->enc_key);
-                disable_kernel_vsx();
-                pagefault_enable();
-                preempt_enable();
-        }
-}
+//         preempt_disable();
+//         pagefault_disable();
+//         enable_kernel_vsx();
+//         ret = aes_my_set_encrypt_key(key, keylen * 8, &ctx->enc_key);
+//         ret |= aes_my_set_decrypt_key(key, keylen * 8, &ctx->dec_key);
+//         disable_kernel_vsx();
+//         pagefault_enable();
+//         preempt_enable();
 
-static void my_aes_decrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src)
-{
-        struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+//         ret |= crypto_cipher_setkey(ctx->fallback, key, keylen);
 
-        if(!crypto_simd_usable()) {
-                crypto_cipher_decrypt_one(ctx->fallback, dst, src);
-        } else {
-                preempt_disable();
-                pagefault_disable();
-                enable_kernel_vsx();
-                aes_my_decrypt(src, dst, &ctx->dec_key);
-                disable_kernel_vsx();
-                pagefault_enable();
-                preempt_enable();
-        }
-}
+//         return ret ? -EINVAL : 0;
+// }
 
-struct crypto_alg my_aes_alg = {
-        .cra_name = "aes",
-        .cra_driver_name = "mydriver",
-        .cra_module = THIS_MODULE,
-        .cra_priority = 1000,
-        .cra_type = NULL,
-        .cra_flags = CRYPTO_ALG_TYPE_CIPHER | CRYPTO_ALG_NEED_FALLBACK,
-        .cra_alignmask = 0,
-        .cra_blocksize = AES_BLOCK_SIZE,
-        .cra_ctxsize = sizeof(struct p8_aes_ctx),
-        .cra_init = p8_aes_init,
-        .cra_exit = p8_aes_exit,
-        .cra_cipher = {
-                       .cia_min_keysize = AES_MIN_KEY_SIZE,
-                       .cia_max_keysize = AES_MAX_KEY_SIZE,
-                       .cia_setkey = p8_aes_setkey,
-                       .cia_encrypt = p8_aes_encrypt,
-                       .cia_decrypt = p8_aes_decrypt,
-        },
-};
+// static void my_aes_encrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src)
+// {
+//         struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+
+//         if (!crypto_simd_usable()) {
+//                 crypto_cipher_encrypt_one(ctx->fallback, dst, src);
+//         } else {
+//                 preempt_disable();
+//                 pagefault_disable();
+//                 enable_kernel_vsx();
+//                 aes_my_encrypt(src, dst, &ctx->enc_key);
+//                 disable_kernel_vsx();
+//                 pagefault_enable();
+//                 preempt_enable();
+//         }
+// }
+
+// static void my_aes_decrypt(struct crypto_tfm *tfm, u8 *dst, const u8 *src)
+// {
+//         struct my_aes_ctx *ctx = crypto_tfm_ctx(tfm);
+
+//         if(!crypto_simd_usable()) {
+//                 crypto_cipher_decrypt_one(ctx->fallback, dst, src);
+//         } else {
+//                 preempt_disable();
+//                 pagefault_disable();
+//                 enable_kernel_vsx();
+//                 aes_my_decrypt(src, dst, &ctx->dec_key);
+//                 disable_kernel_vsx();
+//                 pagefault_enable();
+//                 preempt_enable();
+//         }
+// }
+
+// struct crypto_alg my_aes_alg = {
+//         .cra_name = "aes",
+//         .cra_driver_name = "mydriver",
+//         .cra_module = THIS_MODULE,
+//         .cra_priority = 1000,
+//         .cra_type = NULL,
+//         .cra_flags = CRYPTO_ALG_TYPE_CIPHER | CRYPTO_ALG_NEED_FALLBACK,
+//         .cra_alignmask = 0,
+//         .cra_blocksize = AES_BLOCK_SIZE,
+//         .cra_ctxsize = sizeof(struct p8_aes_ctx),
+//         .cra_init = p8_aes_init,
+//         .cra_exit = p8_aes_exit,
+//         .cra_cipher = {
+//                        .cia_min_keysize = AES_MIN_KEY_SIZE,
+//                        .cia_max_keysize = AES_MAX_KEY_SIZE,
+//                        .cia_setkey = p8_aes_setkey,
+//                        .cia_encrypt = p8_aes_encrypt,
+//                        .cia_decrypt = p8_aes_decrypt,
+//         },
+// };
 
 static ssize_t sysfs_show(struct kobject *kobj, 
                 struct kobj_attribute *attr, char *buf)
@@ -230,11 +267,21 @@ static ssize_t sysfs_store(struct kobject *kobj,
          */
         mutex_lock(&sys_mutex);
         if (strcmp(attr->attr.name, "my_mode") == 0) {
-            sscanf(buf, "%d\n", &my_mode);
+                if (my_mode >= 3){
+                        my_bsize = crypto_cipher_blocksize(my_ctx->tfm);
+                        my_bmode = 1;
+                }
+                sscanf(buf, "%d\n", &my_mode);
         } else if (strcmp(attr->attr.name, "my_bmode") == 0) {
-            sscanf(buf, "%d\n", &my_bmode);
+                if (my_mode >= 3)
+                        ;
+                else
+                        sscanf(buf, "%d\n", &my_bmode);
         } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1) {
-            sscanf(buf, "%ld\n", &my_bsize);
+                if (my_mode >= 3)
+                        ;
+                else
+                        sscanf(buf, "%ld\n", &my_bsize);
         }
         mutex_unlock(&sys_mutex);
         return count;
@@ -329,6 +376,7 @@ static ssize_t my_write(struct file *filp,
 {
         int i, j, arrsize, my_wrbmode, my_wrmode;
         size_t numblocks, my_wrbsize;
+        u8 *enc;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         //ssize_t len = min_t(ssize_t, 4096 - (dev->size - *offset), size);
         ssize_t retval = -ENOMEM;
@@ -338,6 +386,10 @@ static ssize_t my_write(struct file *filp,
         my_wrbsize = my_bsize;
         my_wrbmode = my_bmode;
         my_wrmode = my_mode;
+        if (my_wrmode >= 3) {
+                enc = kmalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
+                memset(enc, 0, my_wrbsize * sizeof(char *));
+        }
         if (my_wrbmode == 1) {
                 tmp = kmalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
                 memset(tmp, 0, my_wrbsize * sizeof(char *));
@@ -385,6 +437,15 @@ static ssize_t my_write(struct file *filp,
                                         else
                                                 *(tmp + j) += ('n' - 'a');
                                 }
+                        } else if (my_wrmode == 3) {
+                                
+                                crypto_cipher_encrypt_one(my_ctx->tfm, enc, tmp);
+                                for (j = 0; j < my_wrbsize; j++)
+                                        *(tmp + j) = *(enc + j);
+                        } else if (my_wrmode == 4) {
+                                crypto_cipher_decrypt_one(my_ctx->tfm, enc, tmp);
+                                for (j = 0; j < my_wrbsize; j++)
+                                        *(tmp + j) = *(enc + j);
                         }
                         for (j = 0; j < my_wrbsize; j++){
                                 if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1))
@@ -413,6 +474,9 @@ static ssize_t my_write(struct file *filp,
                 for (i = 0; i < (size - 1); i++){
                         *(dev->data + i) = *(tmp + i);
                 }
+        }
+        if (my_wrmode >= 3) {
+                kfree(enc);
         }
         kfree(tmp);
         *offset += size;
@@ -486,6 +550,7 @@ static int __init my_driver_init(void)
                 printk(KERN_INFO"Cannot create sysfs files...\n");
                 goto r_sysfs;
         }
+        my_aes_init();
         printk(KERN_INFO "my_driver: intialization success\n");
 
         return 0;
@@ -513,6 +578,7 @@ void __exit my_driver_exit(void)
         int i;
         dev_t devno = MKDEV(mydriver_major, mydriver_minor);    /* Get rid of our char dev entries. */
 
+        my_aes_exit();
         kfree(tmp);
         kobject_put(kobj_ref);
         sysfs_remove_group(kernel_kobj, &attr_group);
