@@ -14,6 +14,8 @@
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Akshat");
 
+#define MY_KEY_SIZE     16
+
 static int my_mode = 0;
 static int my_bmode = 0;
 static size_t my_bsize = 0;
@@ -28,11 +30,17 @@ static DEFINE_MUTEX(sys_mutex);
 static struct class *dev_class;
 static struct kobject *kobj_ref;
 
+struct my_aes_ctx {
+        struct crypto_cipher *tfm;
+        u8 key[MY_KEY_SIZE];
+};
+
 struct my_dev {
         u8 *data;
         unsigned long size;
         struct mutex mutex;
         struct cdev cdev;
+        struct my_aes_ctx my_ctx;
 };
 
 // struct my_aes_ctx {
@@ -41,18 +49,12 @@ struct my_dev {
 //         struct aes_key dec_key;
 // };
 
-struct my_aes_ctx {
-        struct crypto_cipher *tfm;
-        u8 *key;
-};
-static struct my_aes_ctx *my_ctx;
-
 static struct my_dev *my_devs;
 
 static int __init my_driver_init(void);
 static void __exit my_driver_exit(void);
 
-static int my_aes_init(void);
+static int my_aes_init(struct my_dev *dev);
 // static int my_aes_init(struct crypto_tfm *tfm);
 // static void my_aes_exit(struct crypto_tfm *tfm);
 // static int my_aes_setkey(struct crypto_tfm *tfm, const u8 *key,
@@ -100,32 +102,33 @@ static struct file_operations my_fops =
         .release        = my_release,
 };
 
-static int my_aes_init(void)
+static int my_aes_init(struct my_dev *dev)
 {       
+
         if (crypto_has_cipher("aes-generic", 0, 0))
-                my_ctx->tfm = crypto_alloc_cipher("aes-generic", 0, 0);
+                dev->my_ctx.tfm = crypto_alloc_cipher("aes-generic", 0, 0);
         else
                 return -1;
-        if (IS_ERR(my_ctx->tfm)){
+        if (IS_ERR(dev->my_ctx.tfm)){
                 printk(KERN_ERR 
                         "Failed to allocate tranformation aes-generic for : %ld\n",
-                        PTR_ERR(my_ctx->tfm));
-                return PTR_ERR(my_ctx->tfm);
+                        PTR_ERR(dev->my_ctx.tfm));
+                return PTR_ERR(dev->my_ctx.tfm);
         }
 
-        my_ctx->key = kmalloc(16 * sizeof(char *), GFP_KERNEL);
-        my_ctx->key = "abcdefghabcdefgh";
-        if (crypto_cipher_setkey(my_ctx->tfm, my_ctx->key, 16))
+        //my_ctx->key = kmalloc(16 * sizeof(char *), GFP_KERNEL);
+        memcpy(dev->my_ctx.key, "abcdefghabcdefgh", MY_KEY_SIZE);
+        if (crypto_cipher_setkey(dev->my_ctx.tfm, dev->my_ctx.key, MY_KEY_SIZE))
                 return -1;
         
         return 0;
 }
 
-static void my_aes_exit(void)
+static void my_aes_exit(struct my_dev *dev)
 {
-        crypto_free_cipher(my_ctx->tfm);
-        my_ctx->tfm = NULL;
-        kfree(my_ctx->key);
+        crypto_free_cipher(dev->my_ctx.tfm);
+        dev->my_ctx.tfm = NULL;
+        kfree(dev->my_ctx.key);
 }
 
 // static int my_aes_init(struct crypto_tfm *tfm)
@@ -265,23 +268,24 @@ static ssize_t sysfs_store(struct kobject *kobj,
          * Mode 1: Converting user input to uppercase
          * Mode 2: ROT13 encryption/decryption
          */
+
         mutex_lock(&sys_mutex);
         if (strcmp(attr->attr.name, "my_mode") == 0) {
-                if (my_mode >= 3){
-                        my_bsize = crypto_cipher_blocksize(my_ctx->tfm);
-                        my_bmode = 1;
-                }
+                // if (my_mode >= 3){
+                //         my_bsize = crypto_cipher_blocksize(my_ctx->tfm);
+                //         my_bmode = 1;
+                // }
                 sscanf(buf, "%d\n", &my_mode);
         } else if (strcmp(attr->attr.name, "my_bmode") == 0) {
-                if (my_mode >= 3)
-                        ;
-                else
-                        sscanf(buf, "%d\n", &my_bmode);
+                // if (my_mode >= 3)
+                //         ;
+                // else
+                sscanf(buf, "%d\n", &my_bmode);
         } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1) {
-                if (my_mode >= 3)
-                        ;
-                else
-                        sscanf(buf, "%ld\n", &my_bsize);
+                // if (my_mode >= 3)
+                //         ;
+                // else
+                sscanf(buf, "%ld\n", &my_bsize);
         }
         mutex_unlock(&sys_mutex);
         return count;
@@ -324,6 +328,7 @@ static ssize_t my_read(struct file *filp,
 {       
         int i, j, my_rdbmode, my_rdmode;
         size_t numblocks, my_rdbsize;
+        u8 *dec;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         ssize_t len = min_t(ssize_t, dev->size - *offset, size);
         
@@ -332,6 +337,11 @@ static ssize_t my_read(struct file *filp,
         my_rdbsize = my_bsize;
         my_rdbmode = my_bmode;
         my_rdmode = my_mode;
+        if (my_rdmode == 4) {
+                my_rdbsize = crypto_cipher_blocksize(dev->my_ctx.tfm);
+                dec = kmalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
+                memset(dec, 0, my_rdbsize * sizeof(char *));
+        }
         if (my_rdbmode == 1){
                 tmp = kmalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
                 memset(tmp, 0, my_rdbsize * sizeof(char *));
@@ -348,12 +358,18 @@ static ssize_t my_read(struct file *filp,
                         numblocks = len / my_rdbsize;
                 }
                 for (i = 0; i < numblocks ; i++){
+                        memset(tmp, 0, my_rdbsize * sizeof(char *));
                         for (j = 0; j < my_rdbsize; j++) {
                                 if (i == (numblocks - 1) && j == ((len % my_rdbsize) - 1))
                                         break;
                                 *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
                         }
-                        if (i == (numblocks - 1)) {
+                        if (my_rdmode == 4) {
+                                crypto_cipher_decrypt_one(dev->my_ctx.tfm, dec, tmp);
+                                for (j = 0; j < my_rdbsize; j++)
+                                        *(tmp + j) = *(dec + j);
+                        }
+                        if (i == (numblocks - 1) && my_rdmode != 4) {
                                 if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, (len % my_rdbsize) - 1))
                                         return -EFAULT;                        
                         } else {
@@ -386,7 +402,8 @@ static ssize_t my_write(struct file *filp,
         my_wrbsize = my_bsize;
         my_wrbmode = my_bmode;
         my_wrmode = my_mode;
-        if (my_wrmode >= 3) {
+        if (my_wrmode == 3) {
+                my_wrbsize = crypto_cipher_blocksize(dev->my_ctx.tfm);
                 enc = kmalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
                 memset(enc, 0, my_wrbsize * sizeof(char *));
         }
@@ -422,6 +439,7 @@ static ssize_t my_write(struct file *filp,
         }
         if (my_wrbmode == 1){
                 for (i = 0; i < numblocks ; i++){
+                        memset(tmp, 0, my_wrbsize * sizeof(char *));
                         if (copy_from_user(tmp, user_buffer + (i * my_wrbsize), my_wrbsize)){
                                 retval = -EFAULT;
                                 return retval;
@@ -439,18 +457,18 @@ static ssize_t my_write(struct file *filp,
                                 }
                         } else if (my_wrmode == 3) {
                                 
-                                crypto_cipher_encrypt_one(my_ctx->tfm, enc, tmp);
+                                crypto_cipher_encrypt_one(dev->my_ctx.tfm, enc, tmp);
                                 for (j = 0; j < my_wrbsize; j++)
                                         *(tmp + j) = *(enc + j);
                         } else if (my_wrmode == 4) {
-                                crypto_cipher_decrypt_one(my_ctx->tfm, enc, tmp);
+                                crypto_cipher_decrypt_one(dev->my_ctx.tfm, enc, tmp);
                                 for (j = 0; j < my_wrbsize; j++)
                                         *(tmp + j) = *(enc + j);
                         }
                         for (j = 0; j < my_wrbsize; j++){
-                                if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1))
+                                if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1) && my_wrmode != 3)
                                         break;
-                                *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);
+                                *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);        /*TODO use memcpy instead of byte copying*/
                         }
                 }
         }
@@ -529,6 +547,7 @@ static int __init my_driver_init(void)
                 mutex_init(&my_devs[i].mutex);
                 if (my_setup_cdev(&my_devs[i], i)<0)
                         goto r_class;
+                my_aes_init(&my_devs[i]);
         }
 
         /*Creating struct class*/
@@ -550,7 +569,6 @@ static int __init my_driver_init(void)
                 printk(KERN_INFO"Cannot create sysfs files...\n");
                 goto r_sysfs;
         }
-        my_aes_init();
         printk(KERN_INFO "my_driver: intialization success\n");
 
         return 0;
@@ -578,7 +596,6 @@ void __exit my_driver_exit(void)
         int i;
         dev_t devno = MKDEV(mydriver_major, mydriver_minor);    /* Get rid of our char dev entries. */
 
-        my_aes_exit();
         kfree(tmp);
         kobject_put(kobj_ref);
         sysfs_remove_group(kernel_kobj, &attr_group);
@@ -588,6 +605,7 @@ void __exit my_driver_exit(void)
                 for (i = 0; i < my_nr_devs; i++) {
                         my_trim(my_devs + i);
                         cdev_del(&my_devs[i].cdev);
+                        my_aes_exit(&my_devs[i]);
                 }
                 kfree(my_devs);
         }    /* cleanup_module is never called if registering failed. */
