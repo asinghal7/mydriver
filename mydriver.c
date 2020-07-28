@@ -360,16 +360,20 @@ static ssize_t my_read(struct file *filp,
                 for (i = 0; i < numblocks ; i++){
                         memset(tmp, 0, my_rdbsize * sizeof(char *));
                         for (j = 0; j < my_rdbsize; j++) {
-                                if (i == (numblocks - 1) && j == ((len % my_rdbsize) - 1))
+                                if (i == (numblocks - 1) && j == ((len % my_rdbsize) - 1) && my_rdmode < 3 )
                                         break;
                                 *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
+                                printk(KERN_INFO "data in device %x\n", *(dev->data + *offset + (i * my_rdbsize) + j));
                         }
                         if (my_rdmode == 4) {
                                 crypto_cipher_decrypt_one(dev->my_ctx.tfm, dec, tmp);
-                                for (j = 0; j < my_rdbsize; j++)
+                                for (j = 0; j < my_rdbsize; j++) {
+                                        printk(KERN_INFO "data from device %x\n", *(tmp + j));
                                         *(tmp + j) = *(dec + j);
+                                        printk(KERN_INFO "decoded data %x\n", *(dec + j));
+                                }
                         }
-                        if (i == (numblocks - 1) && my_rdmode != 4) {
+                        if (i == (numblocks - 1) && my_rdmode < 3) {
                                 if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, (len % my_rdbsize) - 1))
                                         return -EFAULT;                        
                         } else {
@@ -458,17 +462,21 @@ static ssize_t my_write(struct file *filp,
                         } else if (my_wrmode == 3) {
                                 
                                 crypto_cipher_encrypt_one(dev->my_ctx.tfm, enc, tmp);
-                                for (j = 0; j < my_wrbsize; j++)
+                                for (j = 0; j < my_wrbsize; j++) {
+                                        printk(KERN_INFO "data from user buffer %x\n", *(tmp + j));
                                         *(tmp + j) = *(enc + j);
-                        } else if (my_wrmode == 4) {
+                                        printk(KERN_INFO "encoded data %x\n", *(enc + j));
+                                }
+                        } /*else if (my_wrmode == 4) {
                                 crypto_cipher_decrypt_one(dev->my_ctx.tfm, enc, tmp);
                                 for (j = 0; j < my_wrbsize; j++)
                                         *(tmp + j) = *(enc + j);
-                        }
+                        }*/
                         for (j = 0; j < my_wrbsize; j++){
                                 if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1) && my_wrmode != 3)
                                         break;
                                 *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);        /*TODO use memcpy instead of byte copying*/
+                                printk(KERN_INFO "data written into device %x\n", *(dev->data + (i * my_wrbsize) + j));
                         }
                 }
         }
