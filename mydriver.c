@@ -15,9 +15,11 @@ MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Akshat");
 
 #define MY_KEY_SIZE     16
+#define MY_KEY          "abcdefghabcdefgh"
 
 static int my_mode = 0;
 static int my_bmode = 0;
+static char *my_passkey;
 static size_t my_bsize = 0;
 static int mydriver_major = 0;
 static int mydriver_minor = 0;
@@ -35,12 +37,17 @@ struct my_aes_ctx {
         u8 key[MY_KEY_SIZE];
 };
 
+struct my_skcipher_ctx {
+        struct crypto_skcipher *tfm;
+};
+
 struct my_dev {
         u8 *data;
         unsigned long size;
         struct mutex mutex;
         struct cdev cdev;
         struct my_aes_ctx my_ctx;
+        struct my_skcipher_ctx my_sk_ctx;
 };
 
 static struct my_dev *my_devs;
@@ -48,7 +55,10 @@ static struct my_dev *my_devs;
 static int __init my_driver_init(void);
 static void __exit my_driver_exit(void);
 
+/***************Encryption Functions******************/
+
 static int my_aes_init(struct my_dev *dev);
+static void my_aes_exit(struct my_dev *dev);
 
 /*************** Driver Fuctions **********************/
 static int my_open(struct inode *inode, struct file *file);
@@ -69,11 +79,14 @@ static struct kobj_attribute my_attr_bmode = __ATTR(my_bmode, 0660,
                                                         sysfs_show, sysfs_store);
 static struct kobj_attribute my_attr_bsize = __ATTR(my_bsize, 0660,
                                                         sysfs_show, sysfs_store);
+static struct kobj_attribute my_attr_passkey = __ATTR(my_passkey, 0660,
+                                                        sysfs_show, sysfs_store);
 
 static struct attribute *attrs[] = {
         &my_attr_mode.attr,
         &my_attr_bmode.attr,
         &my_attr_bsize.attr,
+        &my_attr_passkey.attr,
         NULL,
 };
 
@@ -105,7 +118,7 @@ static int my_aes_init(struct my_dev *dev)
         }
 
         //my_ctx->key = kmalloc(16 * sizeof(char *), GFP_KERNEL);
-        memcpy(dev->my_ctx.key, "abcdefghabcdefgh", MY_KEY_SIZE);
+        memcpy(dev->my_ctx.key, MY_KEY, MY_KEY_SIZE);
         if (crypto_cipher_setkey(dev->my_ctx.tfm, dev->my_ctx.key, MY_KEY_SIZE))
                 return -1;
         
@@ -125,7 +138,7 @@ static ssize_t sysfs_show(struct kobject *kobj,
         //printk(KERN_INFO "Sysfs - Read!\n");
         if (strcmp(attr->attr.name, "my_mode") == 0){
                 if (my_bmode == 1) {
-                        return sprintf(buf, "Normal-0 Uppercase-1 ROT13-2 AES_encrypt-3 AES_decrypt-4 -> [%d]\n", my_mode);
+                        return sprintf(buf, "Normal-0 Uppercase-1 ROT13-2 AES-3 -> [%d]\n", my_mode);
                 }
                 else
                         return sprintf(buf, "Normal-0 Uppercase-1 ROT13-2 -> [%d]\n", my_mode);
@@ -133,6 +146,8 @@ static ssize_t sysfs_show(struct kobject *kobj,
                 return sprintf(buf, "%d\n", my_bmode);
         } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1){
                 return sprintf(buf, "%ld\n", my_bsize);
+        } else if (strcmp(attr->attr.name, "my_passkey") == 0){
+                return sprintf(buf, "%s\n", my_passkey);
         }
         return 0;
 }
@@ -154,8 +169,12 @@ static ssize_t sysfs_store(struct kobject *kobj,
          */
         mutex_lock(&sys_mutex);
         if (strcmp(attr->attr.name, "my_mode") == 0) {
+                if (count > 2) {
+                        printk(KERN_ERR "Error: input out of bounds\n");
+                        goto outofbounds;
+                }
                 sscanf(buf, "%d\n", &my_mode);
-                if (my_bmode == 1 && my_mode > 2 && my_mode < 5) {
+                if (my_bmode == 1 && my_mode == 3) {
                         my_bsize = AES_BLOCK_SIZE;
                 } else if (my_mode < 3 && my_mode >= 0) {
                 } else {
@@ -163,6 +182,10 @@ static ssize_t sysfs_store(struct kobject *kobj,
                         my_mode = 0;
                 }
         } else if (strcmp(attr->attr.name, "my_bmode") == 0) {                
+                if (count > 2) {
+                        printk(KERN_ERR "Error: input out of bounds\n");
+                        goto outofbounds;
+                }
                 sscanf(buf, "%d\n", &my_bmode);
                 if (my_bmode != 0 && my_bmode != 1) {
                         printk(KERN_ERR "Error: Block Mode out of bounds\nBlock Mode Reset\n");
@@ -171,11 +194,20 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 if (my_bmode == 0 && my_mode > 2)
                         my_mode = 0;
         } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1) {
+                if (count > 7) {
+                        printk(KERN_ERR "Error: input out of bounds\n");
+                        goto outofbounds;
+                }
                 if (my_mode < 3)
                         sscanf(buf, "%ld\n", &my_bsize);
+        } else if (strcmp(attr->attr.name, "my_passkey") == 0) {
+                sscanf(buf, "%s", my_passkey);
         }
         mutex_unlock(&sys_mutex);
         return count;
+        outofbounds:
+        mutex_unlock(&sys_mutex);
+        return 0;
 }
 
 int my_trim(struct my_dev *dev)
@@ -254,7 +286,7 @@ static ssize_t my_read(struct file *filp,
                         for (j = 0; j < my_rdbsize; j++) {
                                 *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
                         }
-                        if (my_rdmode == 4) {
+                        if (my_rdmode == 3 && strcmp(my_passkey, MY_KEY) == 0) {
                                 crypto_cipher_decrypt_one(dev->my_ctx.tfm, dec, tmp);
                                 for (j = 0; j < my_rdbsize; j++) {
                                         *(tmp + j) = *(dec + j);
@@ -285,8 +317,9 @@ static ssize_t my_write(struct file *filp,
         size_t numblocks, my_wrbsize;
         u8 *enc;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
-        //ssize_t len = min_t(ssize_t, 4096 - (dev->size - *offset), size);
         ssize_t retval = -ENOMEM;
+
+        size = min_t(size_t, PAGE_SIZE * 32, size);
 
         if (mutex_lock_interruptible(&dev->mutex))
                 return -ERESTARTSYS;
@@ -346,7 +379,7 @@ static ssize_t my_write(struct file *filp,
                                         else
                                                 *(tmp + j) += ('n' - 'a');
                                 }
-                        } else if (my_wrmode == 3) {
+                        } else if (my_wrmode == 3 && strcmp(my_passkey, MY_KEY) == 0) {
                                 crypto_cipher_encrypt_one(dev->my_ctx.tfm, enc, tmp);
                                 for (j = 0; j < my_wrbsize; j++) {
                                         *(tmp + j) = *(enc + j);
@@ -455,6 +488,8 @@ static int __init my_driver_init(void)
 
         /*Creating a directory in /sys/kernel/ */
         kobj_ref = kobject_create_and_add("my_sysfs", kernel_kobj);
+        my_passkey = kmalloc(100 * sizeof(char *), GFP_KERNEL);
+
         /*Creating sysfs files*/     
         if (sysfs_create_group(kobj_ref, &attr_group)) {
                 printk(KERN_INFO"Cannot create sysfs files...\n");
@@ -479,6 +514,7 @@ r_class:
                 kfree(my_devs);
         }    /* cleanup_module is never called if registering failed. */
         unregister_chrdev_region(dev, my_nr_devs);
+        kfree(my_passkey);
         return -1;
 }
 
@@ -488,6 +524,7 @@ void __exit my_driver_exit(void)
         dev_t devno = MKDEV(mydriver_major, mydriver_minor);    /* Get rid of our char dev entries. */
 
         kfree(tmp);
+        kfree(my_passkey);
         kobject_put(kobj_ref);
         sysfs_remove_group(kernel_kobj, &attr_group);
         device_destroy(dev_class, devno);
