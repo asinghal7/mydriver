@@ -82,7 +82,7 @@ static ssize_t sysfs_show(struct kobject *kobj,
 {       
         //printk(KERN_INFO "Sysfs - Read!\n");
         if (strcmp(attr->attr.name, "my_mode") == 0){
-                return sprintf(buf, "%d\n", my_mode);
+                return sprintf(buf, "Normal-0 Uppercase-1 -> [%d]\n", my_mode);
         } else if (strcmp(attr->attr.name, "my_bmode") == 0){
                 return sprintf(buf, "%d\n", my_bmode);
         } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1){
