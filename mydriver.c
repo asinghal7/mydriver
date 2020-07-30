@@ -252,36 +252,31 @@ static ssize_t my_read(struct file *filp,
                 for (i = 0; i < numblocks ; i++){
                         memset(tmp, 0, my_rdbsize * sizeof(char *));
                         for (j = 0; j < my_rdbsize; j++) {
-                                if (i == (numblocks - 1) && j == ((len % my_rdbsize) - 1) && my_rdmode < 3 )
-                                        break;
                                 *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
-                                printk(KERN_INFO "data in device %x\n", *(dev->data + *offset + (i * my_rdbsize) + j));
                         }
                         if (my_rdmode == 4) {
                                 crypto_cipher_decrypt_one(dev->my_ctx.tfm, dec, tmp);
                                 for (j = 0; j < my_rdbsize; j++) {
-                                        printk(KERN_INFO "data from device %x\n", *(tmp + j));
                                         *(tmp + j) = *(dec + j);
-                                        printk(KERN_INFO "decoded data %x\n", *(dec + j));
                                 }
                         }
-                        if (i == (numblocks - 1) && my_rdmode < 3) {
-                                if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, (len % my_rdbsize) - 1))
-                                        return -EFAULT;                        
-                        } else {
-                                if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, my_rdbsize))
-                                        return -EFAULT;
-                        }
+                        if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, my_rdbsize))
+                                        goto fault;
                 }
         } else {
                 if (copy_to_user(user_buffer, dev->data + *offset, len))
-                        return -EFAULT;
+                        goto fault;
         }
         if (my_rdbmode == 1)
                 kfree(tmp);
         *offset += len;
         mutex_unlock(&dev->mutex);
         return len;
+        fault:
+        if (my_rdbmode == 1)
+                kfree(tmp);
+        mutex_unlock(&dev->mutex);
+        return -EFAULT;
 }
 static ssize_t my_write(struct file *filp,
                 const char __user *user_buffer, size_t size, loff_t *offset)
@@ -346,29 +341,22 @@ static ssize_t my_write(struct file *filp,
                                         *(tmp + j) += ('A' - 'a');
                         } else if (my_wrmode == 2) {
                                 for (j = 0; j < my_wrbsize; j++) {
-                                        if (strcmp(tmp + j, "m") > 0)
+                                        if (strcmp(tmp + j, "n") > 0)
                                                 *(tmp + j) -= ('n' - 'a');
                                         else
                                                 *(tmp + j) += ('n' - 'a');
                                 }
                         } else if (my_wrmode == 3) {
-                                
                                 crypto_cipher_encrypt_one(dev->my_ctx.tfm, enc, tmp);
                                 for (j = 0; j < my_wrbsize; j++) {
-                                        printk(KERN_INFO "data from user buffer %x\n", *(tmp + j));
                                         *(tmp + j) = *(enc + j);
-                                        printk(KERN_INFO "encoded data %x\n", *(enc + j));
                                 }
-                        } /*else if (my_wrmode == 4) {
-                                crypto_cipher_decrypt_one(dev->my_ctx.tfm, enc, tmp);
-                                for (j = 0; j < my_wrbsize; j++)
-                                        *(tmp + j) = *(enc + j);
-                        }*/
+                        }
                         for (j = 0; j < my_wrbsize; j++){
-                                if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1) && my_wrmode != 3)
-                                        break;
-                                *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);        /*TODO use memcpy instead of byte copying*/
-                                printk(KERN_INFO "data written into device %x\n", *(dev->data + (i * my_wrbsize) + j));
+                                if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1) && my_wrmode < 3)
+                                        *(dev->data + (i * my_wrbsize) + j) = '\n';
+                                else
+                                        *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);        /*TODO use memcpy instead of byte copying*/
                         }
                 }
         }
@@ -383,14 +371,17 @@ static ssize_t my_write(struct file *filp,
                                 *(tmp + i) += ('A' - 'a');
                 } else if (my_wrmode == 2) {
                         for (i = 0; i < (size - 1); i++) {
-                                if (strcmp(tmp + i, "m") > 0)
+                                if (strcmp(tmp + i, "n") > 0)
                                         *(tmp + i) -= ('n' - 'a');
                                 else
                                         *(tmp + i) += ('n' - 'a');
                         }
                 }
-                for (i = 0; i < (size - 1); i++){
-                        *(dev->data + i) = *(tmp + i);
+                for (i = 0; i < size; i++){
+                        if (i == size - 1)
+                                *(dev->data + i) = '\n';
+                        else        
+                                *(dev->data + i) = *(tmp + i);
                 }
         }
         if (my_wrmode >= 3) {
