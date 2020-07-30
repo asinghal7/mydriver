@@ -13,9 +13,13 @@ MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Akshat");
 
 static int my_mode = 0;
+static int my_bmode = 0;
+static size_t my_bsize = 0;
 static int mydriver_major = 0;
 static int mydriver_minor = 0;
 static int my_nr_devs = 2;
+static char *tmp;
+
 
 static DEFINE_MUTEX(sys_mutex);
 
@@ -48,9 +52,15 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 struct kobj_attribute *attr,const char *buf, size_t count);
 static struct kobj_attribute my_attr_mode =  __ATTR(my_mode, 0660,
                                                         sysfs_show, sysfs_store);
+static struct kobj_attribute my_attr_bmode = __ATTR(my_bmode, 0660,
+                                                        sysfs_show, sysfs_store);
+static struct kobj_attribute my_attr_bsize = __ATTR(my_bsize, 0660,
+                                                        sysfs_show, sysfs_store);
 
 static struct attribute *attrs[] = {
         &my_attr_mode.attr,
+        &my_attr_bmode.attr,
+        &my_attr_bsize.attr,
         NULL,
 };
 
@@ -73,6 +83,10 @@ static ssize_t sysfs_show(struct kobject *kobj,
         //printk(KERN_INFO "Sysfs - Read!\n");
         if (strcmp(attr->attr.name, "my_mode") == 0){
                 return sprintf(buf, "%d\n", my_mode);
+        } else if (strcmp(attr->attr.name, "my_bmode") == 0){
+                return sprintf(buf, "%d\n", my_bmode);
+        } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1){
+                return sprintf(buf, "%ld\n", my_bsize);
         }
         return 0;
 }
@@ -95,6 +109,10 @@ static ssize_t sysfs_store(struct kobject *kobj,
         mutex_lock(&sys_mutex);
         if (strcmp(attr->attr.name, "my_mode") == 0) {
             sscanf(buf, "%d\n", &my_mode);
+        } else if (strcmp(attr->attr.name, "my_bmode") == 0) {
+            sscanf(buf, "%d\n", &my_bmode);
+        } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1) {
+            sscanf(buf, "%ld\n", &my_bsize);
         }
         mutex_unlock(&sys_mutex);
         return count;
@@ -135,20 +153,57 @@ static int my_release(struct inode *inode, struct file *file)
 
 static ssize_t my_read(struct file *filp, 
                 char __user *user_buffer, size_t size, loff_t *offset)
-{
+{       
+        int i, j, my_rdbmode, my_rdmode;
+        size_t numblocks, my_rdbsize;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         ssize_t len = min_t(ssize_t, dev->size - *offset, size);
         
         if (mutex_lock_interruptible(&dev->mutex))
                 return -ERESTARTSYS;
-        if (len <= 0){
+        my_rdbsize = my_bsize;
+        my_rdbmode = my_bmode;
+        my_rdmode = my_mode;
+        if (my_rdbmode == 1){
+                tmp = kmalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
+                memset(tmp, 0, my_rdbsize * sizeof(char *));
+        }
+        if (len <= 0) {
                 mutex_unlock(&dev->mutex);
                 return 0;
         }
         /* read data from my_data->buffer to user buffer */
-        if (copy_to_user(user_buffer, dev->data + *offset, len))
-                return -EFAULT;
-
+        if (my_rdbmode == 1){
+                if (my_rdbsize == 0) {
+                        printk(KERN_ALERT "Error: Block Size not set");
+                        mutex_unlock(&dev->mutex);
+                        return -1;
+                }
+                if (len % my_rdbsize) {
+                        numblocks = (len / my_rdbsize) + 1;
+                } else {    
+                        numblocks = len / my_rdbsize;
+                }
+                for (i = 0; i < numblocks ; i++){
+                        for (j = 0; j < my_rdbsize; j++) {
+                                if (i == (numblocks - 1) && j == ((len % my_rdbsize) - 1))
+                                        break;
+                                *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
+                        }
+                        if (i == (numblocks - 1)) {
+                                if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, (len % my_rdbsize) - 1))
+                                        return -EFAULT;                        
+                        } else {
+                                if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, my_rdbsize))
+                                        return -EFAULT;
+                        }
+                }
+        } else {
+                if (copy_to_user(user_buffer, dev->data + *offset, len))
+                        return -EFAULT;
+        }
+        if (my_rdbmode == 1)
+                kfree(tmp);
         *offset += len;
         mutex_unlock(&dev->mutex);
         return len;
@@ -156,31 +211,97 @@ static ssize_t my_read(struct file *filp,
 static ssize_t my_write(struct file *filp,
                 const char __user *user_buffer, size_t size, loff_t *offset)
 {
-        ssize_t fullsize = 1000;
-        
+        int i, j, arrsize, my_wrbmode, my_wrmode;
+        size_t numblocks, my_wrbsize;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
-        ssize_t len = min_t(ssize_t, fullsize - (dev->size - *offset), size);
+        //ssize_t len = min_t(ssize_t, 4096 - (dev->size - *offset), size);
         ssize_t retval = -ENOMEM;
-        
+
         if (mutex_lock_interruptible(&dev->mutex))
                 return -ERESTARTSYS;
-        if (len <= 0)
+        my_wrbsize = my_bsize;
+        my_wrbmode = my_bmode;
+        my_wrmode = my_mode;
+        if (my_wrbmode == 1) {
+                tmp = kmalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
+                memset(tmp, 0, my_wrbsize * sizeof(char *));
+
+        } else {
+                tmp = kmalloc(size * sizeof(char *), GFP_KERNEL);
+                memset(tmp, 0, my_wrbsize * sizeof(char *));
+        }
+        if (size <= 0){
+                mutex_unlock(&dev->mutex);
                 return 0;
+        }
         if (!dev->data) {
-                dev->data = kmalloc(fullsize * sizeof(char *), GFP_KERNEL);
+                if (my_wrbmode == 1){
+                        if (size % my_wrbsize) {
+                                numblocks = ((size / my_wrbsize) + 1);
+                                arrsize = numblocks * my_wrbsize;
+                        } else {    
+                                numblocks = size / my_wrbsize;
+                                arrsize = size;
+                        }
+                }
+                else {
+                        arrsize = size;
+                }
+                dev->data = kmalloc(arrsize * sizeof(char *), GFP_KERNEL);
                 if (!dev->data)
                         goto out;
-                memset(dev->data, 0, fullsize * sizeof(char *));
+                memset(dev->data, 0, arrsize * sizeof(char *));
         }
-        /* read data from user buffer to my_data->buffer */
-        if (copy_from_user(dev->data + *offset, user_buffer, len)){
-                retval = -EFAULT;
-                return retval;
+        if (my_wrbmode == 1){
+                for (i = 0; i < numblocks ; i++){
+                        if (copy_from_user(tmp, user_buffer + (i * my_wrbsize), my_wrbsize)){
+                                retval = -EFAULT;
+                                return retval;
+                        }
+                        if (my_wrmode == 0) {
+                        } else if (my_wrmode == 1) {
+                                for (j = 0; j < my_wrbsize; j++)
+                                        *(tmp + j) += ('A' - 'a');
+                        } else if (my_wrmode == 2) {
+                                for (j = 0; j < my_wrbsize; j++) {
+                                        if (strcmp(tmp + j, "m") > 0)
+                                                *(tmp + j) -= ('n' - 'a');
+                                        else
+                                                *(tmp + j) += ('n' - 'a');
+                                }
+                        }
+                        for (j = 0; j < my_wrbsize; j++){
+                                if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1))
+                                        break;
+                                *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);
+                        }
+                }
         }
-
-        *offset += len;
-        dev -> size += len;
-        retval = len;
+        else {
+                if (copy_from_user(tmp, user_buffer, size)){
+                        retval = -EFAULT;
+                        return retval;
+                }
+                if (my_wrmode == 0) {
+                } else if (my_wrmode == 1) {
+                        for (i = 0; i < (size - 1); i++)
+                                *(tmp + i) += ('A' - 'a');
+                } else if (my_wrmode == 2) {
+                        for (i = 0; i < (size - 1); i++) {
+                                if (strcmp(tmp + i, "m") > 0)
+                                        *(tmp + i) -= ('n' - 'a');
+                                else
+                                        *(tmp + i) += ('n' - 'a');
+                        }
+                }
+                for (i = 0; i < (size - 1); i++){
+                        *(dev->data + i) = *(tmp + i);
+                }
+        }
+        kfree(tmp);
+        *offset += size;
+        dev->size += size;
+        retval = size;
         out:
         mutex_unlock(&dev->mutex);
         return retval;
@@ -276,6 +397,7 @@ void __exit my_driver_exit(void)
         int i;
         dev_t devno = MKDEV(mydriver_major, mydriver_minor);    /* Get rid of our char dev entries. */
 
+        kfree(tmp);
         kobject_put(kobj_ref);
         sysfs_remove_group(kernel_kobj, &attr_group);
         device_destroy(dev_class, devno);
