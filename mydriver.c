@@ -27,7 +27,7 @@ static struct class *dev_class;
 static struct kobject *kobj_ref;
 
 struct my_dev {
-        void *data;
+        char *data;
         unsigned long size;
         struct mutex mutex;
         struct cdev cdev;
@@ -130,7 +130,6 @@ int my_trim(struct my_dev *dev)
         dev->data = NULL;
         return 0;
 }
-
 
 static int my_open(struct inode *inode, struct file *file)
 {       
