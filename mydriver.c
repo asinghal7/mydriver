@@ -39,19 +39,12 @@ struct my_aes_ctx {
         u8 key[MY_KEY_SIZE];
 };
 
-struct my_skcipher_ctx {
-        struct crypto_skcipher *tfm;
-        struct skcipher_request *req;
-        struct crypto_wait wait;
-};
-
 struct my_dev {
         u8 *data;
         unsigned long size;
         struct mutex mutex;
         struct cdev cdev;
         struct my_aes_ctx my_ctx;
-        struct my_skcipher_ctx my_ecb_ctx;
 };
 
 static struct my_dev *my_devs;
@@ -106,32 +99,6 @@ static struct file_operations my_fops =
         .open           = my_open,
         .release        = my_release,
 };
-
-static int my_ecb_init(struct my_dev *dev)
-{
-        if (crypto_has_skcipher("ecb-cipher_null", 0, 0))
-                dev->my_ecb_ctx.tfm = crypto_alloc_skcipher("ecb-cipher_null", 0, 0);
-        else
-                return -1;
-        if (IS_ERR(dev->my_ecb_ctx.tfm)){
-                printk(KERN_ERR 
-                        "Failed to allocate tranformation ecb-cipher_null for : %ld\n",
-                        PTR_ERR(dev->my_ecb_ctx.tfm));
-                return PTR_ERR(dev->my_ecb_ctx.tfm);
-        }
-        dev->my_ecb_ctx.req = skcipher_request_alloc(dev->my_ecb_ctx.tfm, GFP_KERNEL);
-        if (!dev->my_ecb_ctx.req) {
-                pr_info("could not allocate skcipher request\n");
-                return -ENOMEM;
-        }
-        return 0;
-}
-
-static void my_ecb_exit(struct my_dev *dev)
-{
-        crypto_free_skcipher(dev->my_ecb_ctx.tfm);
-        skcipher_request_free(dev->my_ecb_ctx.req);
-}
 
 static int my_aes_init(struct my_dev *dev)
 {       
@@ -196,6 +163,7 @@ static ssize_t sysfs_store(struct kobject *kobj,
          * Mode 0: Text in user input format 
          * Mode 1: Converting user input to uppercase
          * Mode 2: ROT13 encryption/decryption
+         * Mode 3: AES encryption/decryption
          */
         mutex_lock(&sys_mutex);
         if (strcmp(attr->attr.name, "my_mode") == 0) {
@@ -206,10 +174,11 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 sscanf(buf, "%d\n", &my_mode);
                 if (my_bmode == 1 && my_mode == 3) {
                         my_bsize = AES_BLOCK_SIZE;
-                } else if (my_mode < 5 && my_mode >= 0) {               //testing
+                } else if (my_mode < 4 && my_mode >= 0) {               //testing
                 } else {
                         printk(KERN_ERR "Error: Mode out of bounds\nMode Reset");
                         my_mode = 0;
+                        goto outofbounds;
                 }
         } else if (strcmp(attr->attr.name, "my_bmode") == 0) {                
                 if (count > 2) {
@@ -220,6 +189,7 @@ static ssize_t sysfs_store(struct kobject *kobj,
                 if (my_bmode != 0 && my_bmode != 1) {
                         printk(KERN_ERR "Error: Block Mode out of bounds\nBlock Mode Reset\n");
                         my_bmode = 0;
+                        goto outofbounds;
                 }
                 if (my_bmode == 0 && my_mode > 2)
                         my_mode = 0;
@@ -237,7 +207,7 @@ static ssize_t sysfs_store(struct kobject *kobj,
         return count;
         outofbounds:
         mutex_unlock(&sys_mutex);
-        return 0;
+        return -1;
 }
 
 int my_trim(struct my_dev *dev)
@@ -286,7 +256,7 @@ static ssize_t my_read(struct file *filp,
         my_rdbsize = my_bsize;
         my_rdbmode = my_bmode;
         my_rdmode = my_mode;
-        if (my_rdmode == 4) {
+        if (my_rdmode == 3) {
                 my_rdbsize = crypto_cipher_blocksize(dev->my_ctx.tfm);
                 dec = kmalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
                 memset(dec, 0, my_rdbsize * sizeof(char *));
@@ -346,7 +316,6 @@ static ssize_t my_write(struct file *filp,
         int i, j, arrsize, my_wrbmode, my_wrmode;
         size_t numblocks, my_wrbsize;
         u8 *enc;
-        struct scatterlist sg;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         ssize_t retval = -ENOMEM;
 
@@ -445,20 +414,11 @@ static ssize_t my_write(struct file *filp,
                         if (i == size - 1 && my_wrmode != 4){
                                 *(dev->data + i) = '\n';
                         } else {
-                                if(my_wrmode == 4){
-                                        skcipher_request_set_callback(dev->my_ecb_ctx.req, CRYPTO_TFM_REQ_MAY_BACKLOG, crypto_req_done,
-                                                                &dev->my_ecb_ctx.wait);
-                                        sg_copy_from_buffer(&sg, 1, tmp + i, 1);
-                                        skcipher_request_set_crypt(dev->my_ecb_ctx.req, &sg, &sg, 1, NULL);
-                                        crypto_init_wait(&dev->my_ecb_ctx.wait);
-                                        crypto_wait_req(crypto_skcipher_encrypt(dev->my_ecb_ctx.req), &dev->my_ecb_ctx.wait);
-                                        sg_copy_to_buffer(&sg, 1, tmp + i, 1);
-                                }
                                 *(dev->data + i) = *(tmp + i);
                         }
                 }
         }
-        if (my_wrmode >= 3) {
+        if (my_wrmode == 3) {
                 kfree(enc);
         }
         kfree(tmp);
@@ -513,7 +473,6 @@ static int __init my_driver_init(void)
                 if (my_setup_cdev(&my_devs[i], i)<0)
                         goto r_class;
                 my_aes_init(&my_devs[i]);
-                my_ecb_init(&my_devs[i]);
         }
 
         /*Creating struct class*/
@@ -575,9 +534,7 @@ void __exit my_driver_exit(void)
                 for (i = 0; i < my_nr_devs; i++) {
                         my_trim(my_devs + i);
                         cdev_del(&my_devs[i].cdev);
-                        my_aes_exit(&my_devs[i]);
-                        my_ecb_exit(&my_devs[i]);
-                }
+                        my_aes_exit(&my_devs[i]);                }
                 kfree(my_devs);
         }    /* cleanup_module is never called if registering failed. */
         unregister_chrdev_region(devno, my_nr_devs);
