@@ -152,24 +152,27 @@ static ssize_t sysfs_store(struct kobject *kobj,
          * Mode 1: Converting user input to uppercase
          * Mode 2: ROT13 encryption/decryption
          */
-
         mutex_lock(&sys_mutex);
         if (strcmp(attr->attr.name, "my_mode") == 0) {
-                // if (my_mode >= 3){
-                //         my_bsize = crypto_cipher_blocksize(my_ctx->tfm);
-                //         my_bmode = 1;
-                // }
                 sscanf(buf, "%d\n", &my_mode);
-        } else if (strcmp(attr->attr.name, "my_bmode") == 0) {
-                // if (my_mode >= 3)
-                //         ;
-                // else
+                if (my_bmode == 1 && my_mode > 2 && my_mode < 5) {
+                        my_bsize = AES_BLOCK_SIZE;
+                } else if (my_mode < 3 && my_mode >= 0) {
+                } else {
+                        printk(KERN_ERR "Error: Mode out of bounds\nMode Reset");
+                        my_mode = 0;
+                }
+        } else if (strcmp(attr->attr.name, "my_bmode") == 0) {                
                 sscanf(buf, "%d\n", &my_bmode);
+                if (my_bmode != 0 && my_bmode != 1) {
+                        printk(KERN_ERR "Error: Block Mode out of bounds\nBlock Mode Reset\n");
+                        my_bmode = 0;
+                }
+                if (my_bmode == 0 && my_mode > 2)
+                        my_mode = 0;
         } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1) {
-                // if (my_mode >= 3)
-                //         ;
-                // else
-                sscanf(buf, "%ld\n", &my_bsize);
+                if (my_mode < 3)
+                        sscanf(buf, "%ld\n", &my_bsize);
         }
         mutex_unlock(&sys_mutex);
         return count;
