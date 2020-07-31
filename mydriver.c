@@ -26,12 +26,9 @@ static size_t my_bsize = 0;
 static int mydriver_major = 0;
 static int mydriver_minor = 0;
 static int my_nr_devs = 2;
-static u8 *tmp;
-
+static struct class *dev_class;
 
 static DEFINE_MUTEX(sys_mutex);
-
-static struct class *dev_class;
 static struct kobject *kobj_ref;
 
 struct my_aes_ctx {
@@ -45,17 +42,10 @@ struct my_dev {
         struct mutex mutex;
         struct cdev cdev;
         struct my_aes_ctx my_ctx;
+        u8 *buf;
 };
 
 static struct my_dev *my_devs;
-
-static int __init my_driver_init(void);
-static void __exit my_driver_exit(void);
-
-/***************Encryption Functions******************/
-
-static int my_aes_init(struct my_dev *dev);
-static void my_aes_exit(struct my_dev *dev);
 
 /*************** Driver Fuctions **********************/
 static int my_open(struct inode *inode, struct file *file);
@@ -66,68 +56,6 @@ static ssize_t my_write(struct file *filp, const char *user_buffer,
                                         size_t size, loff_t *offset);
  
 /*************** Sysfs Fuctions **********************/
-static ssize_t sysfs_show(struct kobject *kobj,
-                struct kobj_attribute *attr, char *buf);
-static ssize_t sysfs_store(struct kobject *kobj, 
-                struct kobj_attribute *attr,const char *buf, size_t count);
-static struct kobj_attribute my_attr_mode =  __ATTR(my_mode, 0660,
-                                                        sysfs_show, sysfs_store);
-static struct kobj_attribute my_attr_bmode = __ATTR(my_bmode, 0660,
-                                                        sysfs_show, sysfs_store);
-static struct kobj_attribute my_attr_bsize = __ATTR(my_bsize, 0660,
-                                                        sysfs_show, sysfs_store);
-static struct kobj_attribute my_attr_passkey = __ATTR(my_passkey, 0660,
-                                                        sysfs_show, sysfs_store);
-
-static struct attribute *attrs[] = {
-        &my_attr_mode.attr,
-        &my_attr_bmode.attr,
-        &my_attr_bsize.attr,
-        &my_attr_passkey.attr,
-        NULL,
-};
-
-static struct attribute_group attr_group = {
-    .attrs = attrs,
-};
-
-static struct file_operations my_fops =
-{
-        .owner          = THIS_MODULE,
-        .read           = my_read,
-        .write          = my_write,
-        .open           = my_open,
-        .release        = my_release,
-};
-
-static int my_aes_init(struct my_dev *dev)
-{       
-
-        if (crypto_has_cipher("aes-generic", 0, 0))
-                dev->my_ctx.tfm = crypto_alloc_cipher("aes-generic", 0, 0);
-        else
-                return -1;
-        if (IS_ERR(dev->my_ctx.tfm)){
-                printk(KERN_ERR 
-                        "Failed to allocate tranformation aes-generic for : %ld\n",
-                        PTR_ERR(dev->my_ctx.tfm));
-                return PTR_ERR(dev->my_ctx.tfm);
-        }
-
-        //my_ctx->key = kmalloc(16 * sizeof(char *), GFP_KERNEL);
-        memcpy(dev->my_ctx.key, MY_KEY, MY_KEY_SIZE);
-        if (crypto_cipher_setkey(dev->my_ctx.tfm, dev->my_ctx.key, MY_KEY_SIZE))
-                return -1;
-        
-        return 0;
-}
-
-static void my_aes_exit(struct my_dev *dev)
-{
-        crypto_free_cipher(dev->my_ctx.tfm);
-        dev->my_ctx.tfm = NULL;
-        kfree(dev->my_ctx.key);
-}
 
 static ssize_t sysfs_show(struct kobject *kobj, 
                 struct kobj_attribute *attr, char *buf)
@@ -158,57 +86,122 @@ static ssize_t sysfs_show(struct kobject *kobj,
 static ssize_t sysfs_store(struct kobject *kobj,
                 struct kobj_attribute *attr, const char *buf, size_t count)
 {
-        //printk(KERN_INFO "Sysfs - Write!\n");
         /*
          * Mode 0: Text in user input format 
          * Mode 1: Converting user input to uppercase
          * Mode 2: ROT13 encryption/decryption
          * Mode 3: AES encryption/decryption
          */
+        int retval;
         mutex_lock(&sys_mutex);
         if (strcmp(attr->attr.name, "my_mode") == 0) {
                 if (count > 2) {
-                        printk(KERN_ERR "Error: input out of bounds\n");
                         goto outofbounds;
                 }
                 sscanf(buf, "%d\n", &my_mode);
                 if (my_bmode == 1 && my_mode == 3) {
                         my_bsize = AES_BLOCK_SIZE;
-                } else if (my_mode < 4 && my_mode >= 0) {               //testing
+                } else if (my_mode < 3 && my_mode >= 0) {
                 } else {
-                        printk(KERN_ERR "Error: Mode out of bounds\nMode Reset");
                         my_mode = 0;
                         goto outofbounds;
                 }
         } else if (strcmp(attr->attr.name, "my_bmode") == 0) {                
                 if (count > 2) {
-                        printk(KERN_ERR "Error: input out of bounds\n");
                         goto outofbounds;
                 }
+
                 sscanf(buf, "%d\n", &my_bmode);
                 if (my_bmode != 0 && my_bmode != 1) {
-                        printk(KERN_ERR "Error: Block Mode out of bounds\nBlock Mode Reset\n");
+                        pr_err("error: block mode reset\n");
                         my_bmode = 0;
                         goto outofbounds;
                 }
                 if (my_bmode == 0 && my_mode > 2)
                         my_mode = 0;
-        } else if (strcmp(attr->attr.name, "my_bsize") == 0 && my_bmode == 1) {
-                if (count > 7) {
-                        printk(KERN_ERR "Error: input out of bounds\n");
+        } else if (strcmp(attr->attr.name, "my_bsize") == 0) {
+                if (my_bmode == 1) {
+                        if (count > 7) {
+                                goto outofbounds;
+                        }
+
+                        if (my_mode != 3)
+                                sscanf(buf, "%ld\n", &my_bsize);
+                } else {
                         goto outofbounds;
                 }
-                if (my_mode != 3)
-                        sscanf(buf, "%ld\n", &my_bsize);
         } else if (strcmp(attr->attr.name, "my_passkey") == 0) {
+                if(count != (MY_KEY_SIZE + 1))
+                        goto outofbounds;        
                 sscanf(buf, "%s", my_passkey);
         }
+        retval = count;
+        goto out;
+
+outofbounds:
+        retval = -EINVAL;
+out:
         mutex_unlock(&sys_mutex);
-        return count;
-        outofbounds:
-        mutex_unlock(&sys_mutex);
-        return -1;
+        return retval;
 }
+
+static struct kobj_attribute my_attr_mode =  __ATTR(my_mode, 0660,
+                                                        sysfs_show, sysfs_store);
+static struct kobj_attribute my_attr_bmode = __ATTR(my_bmode, 0660,
+                                                        sysfs_show, sysfs_store);
+static struct kobj_attribute my_attr_bsize = __ATTR(my_bsize, 0660,
+                                                        sysfs_show, sysfs_store);
+static struct kobj_attribute my_attr_passkey = __ATTR(my_passkey, 0660,
+                                                        sysfs_show, sysfs_store);
+
+static struct attribute *attrs[] = {
+        &my_attr_mode.attr,
+        &my_attr_bmode.attr,
+        &my_attr_bsize.attr,
+        &my_attr_passkey.attr,
+        NULL,
+};
+
+static struct attribute_group attr_group = {
+    .attrs = attrs,
+};
+
+static int my_aes_init(struct my_dev *dev)
+{       
+        if (crypto_has_cipher("aes-generic", 0, 0))
+                dev->my_ctx.tfm = crypto_alloc_cipher("aes-generic", 0, 0);
+        else
+                return -1;
+        if (IS_ERR(dev->my_ctx.tfm)){
+                printk(KERN_ERR 
+                        "Failed to allocate tranformation aes-generic for : %ld\n",
+                        PTR_ERR(dev->my_ctx.tfm));
+                return PTR_ERR(dev->my_ctx.tfm);
+        }
+
+        //my_ctx->key = kmalloc(16 * sizeof(char *), GFP_KERNEL);
+        memcpy(dev->my_ctx.key, MY_KEY, MY_KEY_SIZE);
+        if (crypto_cipher_setkey(dev->my_ctx.tfm, dev->my_ctx.key, MY_KEY_SIZE))
+                return -1;
+        
+        return 0;
+}
+
+static void my_aes_exit(struct my_dev *dev)
+{
+        crypto_free_cipher(dev->my_ctx.tfm);
+        dev->my_ctx.tfm = NULL;
+        kfree(dev->my_ctx.key);
+}
+
+static struct file_operations my_fops =
+{
+        .owner          = THIS_MODULE,
+        .read           = my_read,
+        .write          = my_write,
+        .open           = my_open,
+        .release        = my_release,
+};
 
 int my_trim(struct my_dev *dev)
 {
@@ -245,71 +238,149 @@ static int my_release(struct inode *inode, struct file *file)
 static ssize_t my_read(struct file *filp, 
                 char __user *user_buffer, size_t size, loff_t *offset)
 {       
-        int i, j, my_rdbmode, my_rdmode;
+        int i, j, my_rdbmode, my_rdmode, retval;
         size_t numblocks, my_rdbsize;
         u8 *dec;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         ssize_t len = min_t(ssize_t, dev->size - *offset, size);
+        char* rd_passkey = kzalloc(MY_KEY_SIZE * sizeof(char *), GFP_KERNEL);
+        if(!rd_passkey){
+                retval = -ENOMEM;
+                goto memfault;
+        }
         
-        if (mutex_lock_interruptible(&dev->mutex))
-                return -ERESTARTSYS;
+        mutex_lock(&sys_mutex);
         my_rdbsize = my_bsize;
         my_rdbmode = my_bmode;
         my_rdmode = my_mode;
-        if (my_rdmode == 3) {
-                my_rdbsize = crypto_cipher_blocksize(dev->my_ctx.tfm);
-                dec = kmalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
-                memset(dec, 0, my_rdbsize * sizeof(char *));
-        }
-        if (my_rdbmode == 1){
-                tmp = kmalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
-                memset(tmp, 0, my_rdbsize * sizeof(char *));
-        }
+        memcpy(rd_passkey, my_passkey, MY_KEY_SIZE);
+        mutex_unlock(&sys_mutex);
+
+        if (mutex_lock_interruptible(&dev->mutex))
+                return -ERESTARTSYS;
+        
         if (len <= 0) {
-                mutex_unlock(&dev->mutex);
-                return 0;
+                retval = 0;
+                goto out;
         }
         /* read data from my_data->buffer to user buffer */
         if (my_rdbmode == 1){
+                if (my_rdmode == 3 && strcmp(rd_passkey, MY_KEY) == 0)
+                        dec = kzalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
+                dev->buf = kzalloc(my_rdbsize * sizeof(char *), GFP_KERNEL);
+                
                 if (my_rdbsize == 0) {
-                        printk(KERN_ALERT "Error: Block Size not set");
-                        mutex_unlock(&dev->mutex);
-                        return -1;
+                        pr_err( "error: block size not set");
+                        retval = -EINVAL;
+                        goto fault;
                 }
+
                 if (len % my_rdbsize) {
                         numblocks = (len / my_rdbsize) + 1;
                 } else {    
                         numblocks = len / my_rdbsize;
                 }
                 for (i = 0; i < numblocks ; i++){
-                        memset(tmp, 0, my_rdbsize * sizeof(char *));
+                        memset(dev->buf, 0, my_rdbsize * sizeof(char *));
                         for (j = 0; j < my_rdbsize; j++) {
-                                *(tmp + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
+                                *(dev->buf + j) = *(dev->data + *offset + (i * my_rdbsize) + j);
                         }
-                        if (my_rdmode == 3 && strcmp(my_passkey, MY_KEY) == 0) {
-                                crypto_cipher_decrypt_one(dev->my_ctx.tfm, dec, tmp);
+
+                        if (my_rdmode == 3 && strcmp(rd_passkey, MY_KEY) == 0) {
+                                crypto_cipher_decrypt_one(dev->my_ctx.tfm, dec, dev->buf);
                                 for (j = 0; j < my_rdbsize; j++) {
-                                        *(tmp + j) = *(dec + j);
+                                        *(dev->buf + j) = *(dec + j);
                                 }
                         }
-                        if (copy_to_user(user_buffer + (i * my_rdbsize), tmp, my_rdbsize))
-                                        goto fault;
+
+                        if (copy_to_user(user_buffer + (i * my_rdbsize), dev->buf, my_rdbsize)) {
+                                retval = -EFAULT;
+                                goto fault;
+                        }
                 }
         } else {
-                if (copy_to_user(user_buffer, dev->data + *offset, len))
+                if (copy_to_user(user_buffer, dev->data + *offset, len)) {
+                        retval = -EFAULT;
                         goto fault;
+                }
         }
-        if (my_rdbmode == 1)
-                kfree(tmp);
+        retval = len;
         *offset += len;
         mutex_unlock(&dev->mutex);
-        return len;
-        fault:
+fault:
         if (my_rdbmode == 1)
-                kfree(tmp);
+                kfree(dev->buf);
+out:
         mutex_unlock(&dev->mutex);
-        return -EFAULT;
+memfault:
+        return retval;
 }
+
+void my_blockwrite(struct file *filp, int mode, int bsize, u8 *enc, char *passkey)
+{       
+        int j;
+        struct my_dev *dev = (struct my_dev *) filp->private_data;
+
+        if (mode == 0) {
+        } else if (mode == 1) {
+                /*
+                 * offset of difference between 'A' and 'a' is added
+                 * data write with no conversion if character not lowercase alphabet
+                 */
+                for (j = 0; j < bsize; j++) {
+                        if ((*(dev->buf + j) >= 'a') && 
+                                                (*(dev->buf + j) <= 'z'))
+                                *(dev->buf + j) += ('A' - 'a');
+                }
+        } else if (mode == 2) {
+                for (j = 0; j < bsize; j++) {
+                        /*
+                         * in blockmode, ROT13 has no checks,
+                         * user needs to enter correct data
+                         */
+                        if (strcmp(dev->buf + j, "n") > 0)
+                                *(dev->buf + j) -= ('n' - 'a');
+                        else
+                                *(dev->buf + j) += ('n' - 'a');
+                }
+        } else if (mode == 3 && strcmp(passkey, MY_KEY) == 0) {
+                crypto_cipher_encrypt_one(dev->my_ctx.tfm, enc, dev->buf);
+                for (j = 0; j < bsize; j++) {
+                        *(dev->buf + j) = *(enc + j);
+                }
+        }
+}
+
+int my_bytewrite(char *buf, int mode, size_t size)
+{       
+        int i, retval = 0;
+        if (mode == 0) {
+        } else if (mode == 1) {
+                for (i = 0; i < (size - 1); i++)
+                        if ((*(buf + i) >= 'a') && 
+                                        (*(buf + i) <= 'z'))
+                                *(buf + i) += ('A' - 'a');
+        } else if (mode == 2) {
+                /*
+                 * in bytemode, ROT13 returns error in case of
+                 * non-lowercase alphabet
+                 */
+                for (i = 0; i < (size - 1); i++) {
+                        if ((*(buf + i) < 'a') || 
+                                        (*(buf + i) > 'z')) {
+                                retval = -EINVAL;
+                                goto out;
+                        }
+                        if (strcmp(buf + i, "n") > 0)
+                                *(buf + i) -= ('n' - 'a');
+                        else
+                                *(buf + i) += ('n' - 'a');
+                }
+        }
+out:
+        return retval;
+}
+
 static ssize_t my_write(struct file *filp,
                 const char __user *user_buffer, size_t size, loff_t *offset)
 {
@@ -318,30 +389,48 @@ static ssize_t my_write(struct file *filp,
         u8 *enc;
         struct my_dev *dev = (struct my_dev *) filp->private_data;
         ssize_t retval = -ENOMEM;
+        char* wr_passkey = kzalloc(MY_KEY_SIZE * sizeof(char *), GFP_KERNEL);
+        memcpy(wr_passkey, my_passkey, MY_KEY_SIZE);
 
         size = min_t(size_t, PAGE_SIZE * 32, size);
 
-        if (mutex_lock_interruptible(&dev->mutex))
-                return -ERESTARTSYS;
+        mutex_lock(&sys_mutex);
         my_wrbsize = my_bsize;
         my_wrbmode = my_bmode;
         my_wrmode = my_mode;
-        if (my_wrmode == 3) {
-                my_wrbsize = crypto_cipher_blocksize(dev->my_ctx.tfm);
-                enc = kmalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
-                memset(enc, 0, my_wrbsize * sizeof(char *));
-        }
-        if (my_wrbmode == 1) {
-                tmp = kmalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
-                memset(tmp, 0, my_wrbsize * sizeof(char *));
+        mutex_unlock(&sys_mutex);
 
+        if (mutex_lock_interruptible(&dev->mutex))
+                return -ERESTARTSYS;
+
+        
+        if (my_wrbmode == 1) {
+                arrsize = my_wrbsize;
+                if (my_wrbsize == 0) {
+                        pr_err( "error: block size not set");
+                        retval = -EINVAL;
+                        goto out;
+                }
+                if (my_wrmode == 3) {
+                        enc = kzalloc(my_wrbsize * sizeof(char *), GFP_KERNEL);
+                        if (!enc) {
+                                retval = -ENOMEM;
+                                goto out;
+                        }
+                }
         } else {
-                tmp = kmalloc(size * sizeof(char *), GFP_KERNEL);
-                memset(tmp, 0, my_wrbsize * sizeof(char *));
+                arrsize = size;
         }
+        dev->buf = kzalloc(arrsize * sizeof(char *), GFP_KERNEL);
+        if (!dev->buf) {
+                retval = -ENOMEM;
+                goto r_enc;
+        }
+
         if (size <= 0){
                 mutex_unlock(&dev->mutex);
-                return 0;
+                retval = 0;
+                goto r_buf;
         }
         if (!dev->data) {
                 if (my_wrbmode == 1){
@@ -358,74 +447,55 @@ static ssize_t my_write(struct file *filp,
                 }
                 dev->data = kmalloc(arrsize * sizeof(char *), GFP_KERNEL);
                 if (!dev->data)
-                        goto out;
+                        goto r_buf;
                 memset(dev->data, 0, arrsize * sizeof(char *));
         }
         if (my_wrbmode == 1){
                 for (i = 0; i < numblocks ; i++){
-                        memset(tmp, 0, my_wrbsize * sizeof(char *));
-                        if (copy_from_user(tmp, user_buffer + (i * my_wrbsize), my_wrbsize)){
+                        memset(dev->buf, 0, my_wrbsize * sizeof(char *));
+                        if (copy_from_user(dev->buf, user_buffer + (i * my_wrbsize), my_wrbsize)){
                                 retval = -EFAULT;
-                                return retval;
+                                goto r_buf;
                         }
-                        if (my_wrmode == 0) {
-                        } else if (my_wrmode == 1) {
-                                for (j = 0; j < my_wrbsize; j++)
-                                        *(tmp + j) += ('A' - 'a');
-                        } else if (my_wrmode == 2) {
-                                for (j = 0; j < my_wrbsize; j++) {
-                                        if (strcmp(tmp + j, "n") > 0)
-                                                *(tmp + j) -= ('n' - 'a');
-                                        else
-                                                *(tmp + j) += ('n' - 'a');
-                                }
-                        } else if (my_wrmode == 3 && strcmp(my_passkey, MY_KEY) == 0) {
-                                crypto_cipher_encrypt_one(dev->my_ctx.tfm, enc, tmp);
-                                for (j = 0; j < my_wrbsize; j++) {
-                                        *(tmp + j) = *(enc + j);
-                                }
-                        }
+                        my_blockwrite(filp, my_wrmode, my_wrbsize, enc, wr_passkey);
                         for (j = 0; j < my_wrbsize; j++){
                                 if (i == (numblocks - 1) && j == ((size % my_wrbsize) - 1) && my_wrmode < 3)
                                         *(dev->data + (i * my_wrbsize) + j) = '\n';
                                 else
-                                        *(dev->data + (i * my_wrbsize) + j)= *(tmp + j);        /*TODO use memcpy instead of byte copying*/
+                                        *(dev->data + (i * my_wrbsize) + j)= *(dev->buf + j);
+                                /*TODO use memcpy instead of byte copying*/
                         }
                 }
         }
         else {
-                if (copy_from_user(tmp, user_buffer, size)){
+                if (copy_from_user(dev->buf, user_buffer, size)){
                         retval = -EFAULT;
-                        return retval;
+                        goto r_buf;
                 }
-                if (my_wrmode == 0) {
-                } else if (my_wrmode == 1) {
-                        for (i = 0; i < (size - 1); i++)
-                                *(tmp + i) += ('A' - 'a');
-                } else if (my_wrmode == 2) {
-                        for (i = 0; i < (size - 1); i++) {
-                                if (strcmp(tmp + i, "n") > 0)
-                                        *(tmp + i) -= ('n' - 'a');
-                                else
-                                        *(tmp + i) += ('n' - 'a');
-                        }
+                retval = my_bytewrite(dev->buf, my_wrmode, size);
+                if (retval) {
+                        retval = -EINVAL;
+                        goto r_buf;
                 }
                 for (i = 0; i < size; i++){
                         if (i == size - 1 && my_wrmode != 4){
                                 *(dev->data + i) = '\n';
                         } else {
-                                *(dev->data + i) = *(tmp + i);
+                                *(dev->data + i) = *(dev->buf + i);
                         }
                 }
         }
-        if (my_wrmode == 3) {
-                kfree(enc);
-        }
-        kfree(tmp);
+        
         *offset += size;
         dev->size += size;
         retval = size;
-        out:
+r_buf:
+        kfree(dev->buf);
+r_enc:
+        if (my_wrmode == 3) {
+                kfree(enc);
+        }
+out:
         mutex_unlock(&dev->mutex);
         return retval;
 }
@@ -470,7 +540,7 @@ static int __init my_driver_init(void)
         memset(my_devs, 0, my_nr_devs * sizeof(struct my_dev));        /* Initialize each device. */
         for (i = 0; i < my_nr_devs; i++) {
                 mutex_init(&my_devs[i].mutex);
-                if (my_setup_cdev(&my_devs[i], i)<0)
+                if (my_setup_cdev(&my_devs[i], i) < 0)
                         goto r_class;
                 my_aes_init(&my_devs[i]);
         }
@@ -524,7 +594,6 @@ void __exit my_driver_exit(void)
         int i;
         dev_t devno = MKDEV(mydriver_major, mydriver_minor);    /* Get rid of our char dev entries. */
 
-        kfree(tmp);
         kfree(my_passkey);
         kobject_put(kobj_ref);
         sysfs_remove_group(kernel_kobj, &attr_group);
